@@ -1,0 +1,25 @@
+.strategy-workbench {width:100%; max-width:860px; color:var(--ink)}
+.strategy-workbench>h2,.strategy-workbench>h3 {font-family:var(--serif); margin:18px 0 8px}
+.strategy-workbench>h3 {font-size:22px; margin-top:26px}
+.strategy-board {display:grid; grid-template-columns:1fr minmax(48px,110px) 1fr; align-items:center; margin:17px 0 10px; padding:25px 16px 20px; background:#354a3d; color:#f6f0df; border:5px solid #574d3e; border-radius:25px; box-shadow:inset 0 0 0 1px #6e7b64}
+.strategy-seat,.strategy-pot {display:grid; justify-items:center; gap:7px; text-align:center}
+.strategy-seat>span,.strategy-pot small,.strategy-pot span {font:600 13px var(--sans); color:#eee9d9}
+.strategy-card {display:grid; width:70px; aspect-ratio:5/7; place-items:center; background:#fff7df; color:#733b2c; border:4px solid #fff7df; border-radius:7px; font:42px var(--serif); box-shadow:0 2px 0 #25342b}
+.strategy-card.face-down {background:repeating-linear-gradient(45deg,#9d533d 0px,#9d533d 3px,#bc8163 3px,#bc8163 5px)}
+.strategy-pot strong {font:38px/1 var(--serif)}
+.strategy-history {text-align:center; color:var(--muted); font:13px/1.5 var(--mono)}
+.strategy-result,.strategy-turn {margin:5px 0;font-weight:650}
+.strategy-controls {display:flex; gap:12px; align-items:end; flex-wrap:wrap; margin:12px 0}
+.strategy-controls label {display:grid; gap:4px; margin:0; font-size:13px; font-weight:600; min-width:0; max-width:100%}
+.strategy-controls select {max-width:100%; background:var(--surface); border:1px solid var(--line); padding:7px 8px; border-radius:6px; min-height:37px}
+.strategy-actions {display:flex; flex-wrap:wrap; gap:8px}
+.strategy-rules {border-top:1px solid var(--line);margin-top:16px;padding-top:10px}
+.strategy-rules summary {cursor:pointer;font-weight:600}
+.strategy-rules p,.strategy-review p {line-height:1.5}
+.strategy-stat,.strategy-log,.strategy-decision {display:grid; gap:5px; padding:10px 0; border-bottom:1px solid var(--line); text-align:left; overflow-wrap:anywhere}
+.strategy-stat span,.strategy-stat small,.strategy-decision span {color:var(--muted)}
+.strategy-log {width:100%; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:14px}
+.strategy-log:hover {background:var(--surface)}
+.strategy-log span:last-child {color:var(--accent)}
+.strategy-review {padding-top:8px}
+@media(max-width:480px){.strategy-board {padding:18px 8px;border-radius:15px}.strategy-card{width:55px;font-size:33px}.strategy-controls{align-items:start}.strategy-controls label{width:100%}.strategy-log{gap:6px;font-size:13px}}
