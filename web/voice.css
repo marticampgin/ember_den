@@ -1,0 +1,18 @@
+.composer .voice-mic { align-self:center; width:34px; height:38px; flex:none; }
+.voice-mic[aria-pressed="true"] { color:var(--accent); background:var(--accent-light); }
+.voice-feedback { display:flex; align-items:center; gap:10px; flex-wrap:wrap; font:12px/1.5 var(--sans); color:var(--muted); margin:7px 1px 0; }
+.voice-feedback:has([data-voice-status]:empty) { display:none; }
+.voice-feedback button, .read-turn { color:var(--accent); padding:3px 2px; font:inherit; }
+.voice-feedback button:hover, .read-turn:hover { text-decoration:underline; }
+.read-turn { display:inline-flex; align-items:center; gap:5px; color:var(--muted); }
+.composer-tool { display:inline-flex; align-items:center; align-self:center; justify-content:center; width:30px; height:36px; color:var(--muted); border-radius:5px; flex:none; }
+.composer-tool:hover { background:var(--rail); color:var(--accent); }
+.voice-settings { max-width:850px; margin-top:32px; padding-top:24px; border-top:1px solid var(--line); }
+.voice-settings h2 { margin-top:0; font:500 26px/1.2 var(--serif); }
+.voice-settings select { max-width:100%; padding:8px; border:1px solid var(--line); border-radius:6px; background:var(--surface); }
+.voice-settings p { margin:3px 0; color:var(--muted); font:13px/1.5 var(--sans); }
+@media(max-width:510px) {
+  .composer { gap:4px; }
+  .composer .voice-mic, .composer-tool { width:35px; height:40px; }
+}
+
