@@ -1,0 +1,87 @@
+:host {
+  display: block;
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  width: 100%;
+  height: clamp(238px, 29vw, 430px);
+  border-radius: 12px;
+  background: #302b52;
+  container-type: size;
+}
+.world {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: center center / cover no-repeat url('./assets/clearing.webp');
+  image-rendering: pixelated;
+}
+.actor {
+  position: absolute;
+  width: clamp(104px, 19cqw, 48cqh);
+  left: 46%;
+  bottom: 15.2%;
+  transform: translateX(-50%);
+  aspect-ratio: 135 / 150;
+}
+.actor canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  position: relative;
+  transform-origin: 50% 96%;
+  animation: breathe 3.6s ease-in-out infinite;
+  image-rendering: pixelated;
+}
+.shadow {
+  position: absolute;
+  inset: auto 8% 1% 7%;
+  height: 6%;
+  border-radius: 50%;
+  background: #28241c60;
+}
+.sleep { display: none; }
+:host([state="idle"]) .sleep {
+  display: block;
+  position: absolute;
+  right: 7%;
+  top: 36%;
+  color: #fff3d5;
+  text-shadow: 1px 2px #4c425f;
+  font: bold clamp(12px, 1.1cqw, 17px) Consolas, monospace;
+}
+.sleep b { position: absolute; animation: drift 3.6s linear infinite; }
+.sleep b + b { animation-delay: -1.8s; }
+.fireflies i {
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  top: 70%;
+  left: 16%;
+  background: #ffea9d;
+  box-shadow: 0 0 6px 2px #ffce799c;
+  animation: glimmer 6s ease-in-out infinite;
+}
+.fireflies i:nth-child(2) { left: 31%; top: 77%; animation-delay: -1.9s; }
+.fireflies i:nth-child(3) { left: 66%; top: 73%; animation-delay: -3.7s; }
+.fireflies i:nth-child(4) { left: 75%; top: 64%; animation-delay: -4.8s; }
+.fireflies i:nth-child(5) { left: 87%; top: 76%; animation-delay: -2.5s; }
+@keyframes breathe { 50% { transform: scale(1.003, .978); } }
+@keyframes drift {
+  0% { opacity: 0; transform: translate(0, 0) scale(.7); }
+  22%, 65% { opacity: .9; }
+  100% { opacity: 0; transform: translate(17px, -28px) scale(1.08); }
+}
+@keyframes glimmer {
+  0%, 100% { opacity: .05; transform: translate(0, 2px); }
+  52% { opacity: .95; transform: translate(5px, -7px); }
+}
+@media (max-width: 600px) {
+  :host { height: clamp(205px, 59vw, 275px); border-radius: 10px; }
+  .actor { left: 48%; width: 31cqw; max-width: 147px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; }
+  .sleep b + b { display: none; }
+  .fireflies { display: none; }
+}
