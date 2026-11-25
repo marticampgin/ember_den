@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.venv/
+.ember-den/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
