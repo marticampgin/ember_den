@@ -15,11 +15,15 @@ from itertools import chain
 from urllib.parse import unquote, urlsplit
 
 from .documents import Documents
+from .importer import extract_document
+from .insights import overview
 from .cancel import Cancellation
 from .engine import Engine, checked_text
 from .laboratory import Laboratory
 from .provider import Ollama, ProviderError
 from .store import ConflictError, Store
+from .tools import Tools
+from .voice import Voice
 
 
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
@@ -31,10 +35,21 @@ class Application:
         self.store = Store(Path(data_dir) / "ember.sqlite3")
         self.store.recover()
         self.documents = Documents(self.store.path)
-        self.engine = Engine(self.store, provider or Ollama(), self.documents)
+        self.tools = Tools(data_dir)
+        self.voice = Voice()
+        self.engine = Engine(self.store, provider or Ollama(), self.documents, tools=self.tools)
         self.lab = Laboratory(self.store.path, self.engine.run_config, self.engine.provider.inventory)
 
     def route(self, method, path, body):
+        if path == "/api/lab/overview" and method == "GET":
+            return 200, overview(self.store)
+        if path == "/api/documents/import" and method == "POST":
+            name, text = extract_document(body)
+            return 201, self.documents.add(name,text)
+        if path == "/api/tools" or path.startswith("/api/tools/"):
+            return self.tools.route(method,path,body)
+        if path.startswith("/api/voice/"):
+            return self.voice.route(method,path,body)
         if path.startswith("/api/lab/"):
             return self.lab.route(method, path, body)
         if path == "/api/status" and method == "GET":
@@ -45,6 +60,8 @@ class Application:
             if method == "PATCH":
                 return 200, self.engine.save_settings(body)
         parts = path.strip("/").split("/")
+        if len(parts)==4 and parts[1]=="runs" and parts[3]=="feedback" and method in ("GET","POST"):
+            return 200, self.store.feedback(parts[2],body if method=="POST" else None)
         if len(parts) == 4 and parts[1] == "runs" and parts[3] == "stop" and method == "POST":
             self.engine.stop(parts[2])
             return 200, {"ok": True}
@@ -121,8 +138,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get("Transfer-Encoding"):
             raise ValueError("Chunked request bodies are not supported.")
         length = int(self.headers.get("Content-Length", "0"))
-        if not 0 <= length <= MAX_BODY:
-            raise ValueError("Request body exceeds the 1 MB limit.")
+        limit = 7 * MAX_BODY if self.path == "/api/documents/import" else MAX_BODY
+        if not 0 <= length <= limit:
+            raise ValueError("Request body exceeds the upload limit.")
         if not length and not required:
             return {}
         if self.headers.get_content_type() != "application/json":

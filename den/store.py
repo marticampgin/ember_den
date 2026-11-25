@@ -50,6 +50,11 @@ class Store:
                 CREATE TABLE IF NOT EXISTS memories (
                     id TEXT PRIMARY KEY, text TEXT NOT NULL, updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS run_feedback (
+                    run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+                    rating TEXT NOT NULL, note TEXT NOT NULL,
+                    memory_id TEXT REFERENCES memories(id) ON DELETE SET NULL
+                );
             """)
 
     @contextmanager
@@ -89,6 +94,28 @@ class Store:
     def memories(self):
         with self.connect() as db:
             return [dict(r) for r in db.execute("SELECT * FROM memories ORDER BY updated_at DESC, rowid DESC")]
+
+    def feedback(self, run_id, changes=None):
+        with self.connect() as db:
+            if changes is not None:
+                db.execute("BEGIN IMMEDIATE")
+            if not db.execute("SELECT 1 FROM runs WHERE id=?", (run_id,)).fetchone():
+                raise KeyError("Run not found.")
+            row=db.execute("SELECT rating,note,memory_id FROM run_feedback WHERE run_id=?", (run_id,)).fetchone()
+            current=dict(row) if row else {"rating":None,"note":"","memory_id":None}
+            if changes is None:
+                return current
+            rating, note, remember = changes.get("rating"),changes.get("note",""),changes.get("remember",False)
+            if rating not in ("helpful","unhelpful") or not isinstance(note,str) or len(note)>2000:
+                raise ValueError("Choose a rating and enter up to 2,000 characters of feedback.")
+            if type(remember) is not bool or (remember and not note.strip()):
+                raise ValueError("Enter a preference before saving it to memory.")
+            memory_id=current["memory_id"]
+            if remember and not memory_id:
+                memory_id=new_id()
+                db.execute("INSERT INTO memories VALUES (?,?,?)", (memory_id,note.strip(),utcnow()))
+            db.execute("INSERT OR REPLACE INTO run_feedback VALUES (?,?,?,?)",(run_id,rating,note.strip(),memory_id))
+            return {"rating":rating,"note":note.strip(),"memory_id":memory_id}
 
     def save_memory(self, text, memory_id=None):
         when = utcnow()
