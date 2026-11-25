@@ -19,18 +19,28 @@ class Provider(Protocol):
     name: str
 
     def inventory(self) -> list[dict]: ...
+    def embedding_inventory(self) -> list[dict]: ...
+    def embed(self, model: str, texts: list[str], cancellation: Cancellation, device: str) -> list[list[float]]: ...
 
     def stream(self, messages: list[dict], config: dict, cancellation: Cancellation) -> Iterator[dict]:
         """Yield {'text': ...} chunks and a final {'metrics': ...} packet."""
         ...
 
 
-def local_chat_model(name, metadata):
+def local_model(name, metadata):
     if metadata.get("remote_host") or metadata.get("remote_model"):
         return False
     details = metadata.get("details") or {}
     identifiers = f"{name} {details.get('family', '')}".lower()
-    return not re.search(r"embed|(?:^|[-_: /])cloud(?:$|[-_: /])", identifiers)
+    return not re.search(r"(?:^|[-_: /])cloud(?:$|[-_: /])", identifiers)
+
+
+def embedding_name(name, metadata):
+    return "embed" in (name + " " + str((metadata.get("details") or {}).get("family", ""))).lower()
+
+
+def local_chat_model(name, metadata):
+    return local_model(name, metadata) and not embedding_name(name, metadata)
 
 
 def runtime_error(message, status):
@@ -121,13 +131,13 @@ class Ollama:
         finally:
             connection.close()
 
-    def inventory(self):
+    def _available(self, embeddings):
         with self.request("/api/tags", timeout=2) as response:
             models = json.load(response)["models"]
             result = []
             for model in models:
                 name = model["name"]
-                if not local_chat_model(name, model):
+                if not local_model(name, model) or embedding_name(name, model) != embeddings:
                     continue
                 details = model.get("details") or {}
                 result.append({
@@ -136,6 +146,26 @@ class Ollama:
                     "quantization": details.get("quantization_level"),
                 })
             return result
+
+    def inventory(self):
+        return self._available(False)
+
+    def embedding_inventory(self):
+        return self._available(True)
+
+    def embed(self, model, texts, cancellation, device="auto"):
+        with self.request("/api/show", {"model": model}, cancellation=cancellation) as response:
+            info = json.load(response)
+        if not local_model(model, info) or "embedding" not in (info.get("capabilities") or ["embedding"]):
+            raise ProviderError("Choose an installed local embedding model.")
+        payload = {"model": model, "input": texts, "truncate": True}
+        if device == "cpu":
+            payload["options"] = {"num_gpu": 0}
+        with self.request("/api/embed", payload, timeout=180, cancellation=cancellation) as response:
+            vectors = json.load(response)["embeddings"]
+        if not isinstance(vectors, list) or len(vectors) != len(texts):
+            raise ProviderError("Ollama returned an incomplete embedding batch.")
+        return vectors
 
     def footprint(self, model):
         # Sample only this model's reported residency; this endpoint does not measure peak VRAM.
@@ -158,7 +188,9 @@ class Ollama:
         if capabilities and "completion" not in capabilities:
             raise ProviderError("This model does not support chat. Choose a language model in Settings.")
         options = {"temperature": config["temperature"], "num_ctx": config["context_length"],
-                   "num_predict": min(1024, config["context_length"] // 2)}
+                   "num_predict": min(config.get("_max_output_tokens", 1024), config["context_length"] // 2)}
+        if config.get("device") == "cpu":
+            options["num_gpu"] = 0
         if config.get("seed") is not None:
             options["seed"] = config["seed"]
         payload = {"model": model, "messages": messages, "options": options, "stream": True}
