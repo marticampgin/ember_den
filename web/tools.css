@@ -1,0 +1,31 @@
+.tools-view {display:grid;gap:20px;padding-bottom:24px}
+.tools-view .page-heading {margin-bottom:0}
+.tools-view h2 {font:500 clamp(23px,2vw,29px)/1.2 var(--serif);margin:0}
+.tools-view h3 {font:550 18px/1.3 var(--serif);margin:0}
+.tools-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.tools-panel {scroll-margin-top:calc(var(--bar-height) + 12px);min-width:0;align-content:start;display:grid;gap:12px;padding:clamp(16px,2vw,25px);border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.tools-form,.tools-field,.tools-hits,.tools-list,.tools-proposal {display:grid;gap:12px;min-width:0}
+.tools-field {gap:6px;font:600 13px/1.5 var(--sans)}
+.tools-field input,.tools-field select,.tools-field textarea {width:100%;min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:5px;padding:9px 12px;font:400 14px/1.45 var(--sans)}
+.tools-field textarea {resize:vertical;min-height:70px}
+.tools-form>.button {justify-self:start}
+.tools-description,.tools-empty,.tools-feedback,.tools-hit p,.tools-log-detail p,.tools-files p {margin:0;font:400 14px/1.55 var(--sans);color:var(--muted)}
+.tools-description {margin-top:-4px}
+.tools-feedback:empty,.tools-hits:empty,.tools-view>.form-error:empty {display:none}
+.tools-hit,.tools-proposal {border-top:1px solid var(--line);padding-top:14px}
+.tools-hit p {margin-top:4px;white-space:pre-line}
+.tools-view a.tools-source {color:var(--accent);font-weight:600;text-decoration:underline;text-underline-offset:3px}
+.tools-path,.tools-preview,.tools-examples dd {font:400 12px/1.55 var(--mono);overflow-wrap:anywhere}
+.tools-path {margin:0;color:var(--muted)}
+.tools-preview {border:1px solid var(--line);padding:12px;border-radius:5px;background:var(--paper);margin:0;max-height:240px;overflow:auto;white-space:pre-wrap}
+.tools-actions {display:flex;gap:8px;flex-wrap:wrap}
+.tools-details summary {cursor:pointer;font:600 13px/1.5 var(--sans)}
+.tools-details[open]>summary {margin-bottom:9px}
+.tools-log {border-top:1px solid var(--line);padding-top:9px}
+.tools-log-detail {display:grid;gap:6px}
+.tools-log-detail small {color:var(--muted)}
+.tools-examples {display:grid;grid-template-columns:max-content 1fr;gap:7px 12px}
+.tools-examples dt {font-weight:600;font-size:13px}
+.tools-examples dd {margin:0}
+@media(max-width:760px){.tools-grid {grid-template-columns:1fr}.tools-examples {grid-template-columns:1fr;gap:3px}.tools-examples dd {margin-bottom:7px}}
+
