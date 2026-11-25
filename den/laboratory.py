@@ -82,7 +82,7 @@ def _snapshot(raw):
     if source is not None:
         _text(source, "Source run", 128, required=True)
     check_mode = raw.get("check_mode", "contains")
-    if check_mode not in ("contains", "exact", "json", "source"):
+    if check_mode not in ("contains", "exact", "json", "source", "tool"):
         raise ValueError("Unknown evaluation check.")
     return {
         "check_mode": check_mode,
@@ -280,6 +280,12 @@ class Laboratory:
                 self._busy.release()
         return 202, {"id": identifier}
 
+    def case_values(self, identifier, body):
+        snapshot = _snapshot(body)
+        self._attach_source_tool(snapshot)
+        name = _text(body.get("name"), "Case name", 100, True).strip()
+        return identifier, _now(), protected(name), json.dumps(_stored_snapshot(snapshot))
+
     def route(self, method, path, body=None):
         extension = self.evaluation.route(method, path, body)
         if extension is not None:
@@ -305,13 +311,10 @@ class Laboratory:
                 return self._start(_snapshot(experiment["snapshot"]), previous=experiment, frozen=refs)
         if path == "/api/lab/cases":
             if method == "POST":
-                snapshot = _snapshot(body)
-                self._attach_source_tool(snapshot)
-                name = _text(body.get("name"), "Case name", 100, True).strip()
                 identifier = uuid.uuid4().hex
+                record = self.case_values(identifier, body)
                 with self._db() as db:
-                    db.execute("INSERT INTO lab_cases VALUES (?, ?, ?, ?)",
-                               (identifier, _now(), protected(name), json.dumps(_stored_snapshot(snapshot))))
+                    db.execute("INSERT INTO lab_cases VALUES (?, ?, ?, ?)", record)
                 return 201, {"id": identifier}
             if method == "GET":
                 with self._db() as db:

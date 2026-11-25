@@ -1,9 +1,51 @@
 """Deterministic checks, saved settings, and repeatable test-suite execution."""
 import json
 import threading
+import uuid
 
-from .engine import protected, validate_config
+from .engine import choose_model, protected, validate_config
 from .store import new_id, utcnow
+
+
+# Stable keys keep an opt-in refresh from replacing renamed or edited cases.
+STARTER_CASES = (
+    ("conversation", {
+        "name": "Conversation · Help someone get started",
+        "prompt": "I have ten minutes for a creative project, but I feel stuck. Suggest one small action and ask one useful follow-up question. Keep it to two sentences.",
+    }),
+    ("reasoning", {
+        "name": "Reasoning · Workshop finish time",
+        "prompt": "A workshop starts at 14:10. The first session lasts 25 minutes, the break lasts 10 minutes, and the final session lasts 35 minutes. Reply with only the finish time in 24-hour HH:MM format.",
+        "check_mode": "exact", "expected": "15:20",
+    }),
+    ("reference", {
+        "name": "Grounding · Read a station note",
+        "prompt": "Using the supplied station note, give only the call sign for the west tide gauge.",
+        "check_mode": "contains", "expected": "Alder-27",
+        "context": [{"id":"starter-estuary-stations", "kind":"document", "name":"estuary-stations.md",
+                     "line_start":1, "line_end":2, "text":"West tide gauge: Alder-27.\nEast tide gauge: Reed-41."}],
+    }),
+    ("history", {
+        "name": "Memory · Recall a prior choice",
+        "prompt": "What color did I choose for the field journal cover? Give only the color name.",
+        "check_mode": "contains", "expected": "Juniper Slate",
+        "history": [{"role":"user", "content":"For my field journal, I chose a cover in Juniper Slate."},
+                    {"role":"assistant", "content":"Understood. We can use that for the cover."}],
+    }),
+    ("json", {
+        "name": "Structured output · Write valid JSON",
+        "prompt": "Return a single JSON object describing a tide gauge named West with a numeric depth of 4 metres. Use the keys name and depth_m. Omit markdown and any explanatory text.",
+        "check_mode": "json",
+    }),
+    ("calculator", {
+        "name": "Tool selection · Local calculator",
+        "prompt": "/calc (73 - 18) * 4", "check_mode": "tool", "expected": "calculator",
+    }),
+)
+
+
+def starter_id(key):
+    return uuid.uuid5(uuid.NAMESPACE_URL, "urn:ember-den:starter-case:" + key).hex
 
 
 def check_answer(mode, expected, run):
@@ -15,6 +57,9 @@ def check_answer(mode, expected, run):
             return False
     if not expected:
         return None
+    if mode == "tool":
+        selection = run.get("tool_execution") or {}
+        return selection.get("tool") == expected.strip() and (selection.get("output") or {}).get("status") == "completed"
     if mode == "source":
         return any(expected.casefold() == ref.get("name", "").casefold() for ref in run.get("context", []))
     if mode == "exact":
@@ -48,6 +93,38 @@ class Evaluation:
             return [{"id": row["id"], "name": row["name"], "config": json.loads(row["config"])}
                     for row in db.execute("SELECT * FROM lab_profiles ORDER BY name COLLATE NOCASE")]
 
+    def add_starters(self, preferred):
+        def missing(db):
+            return [(key, case) for key, case in STARTER_CASES if not db.execute(
+                "SELECT 1 FROM lab_cases WHERE id=? OR name=? COLLATE NOCASE",
+                (starter_id(key), case["name"])).fetchone()]
+
+        with self.lab._db() as db:
+            if not missing(db):
+                return 200, {"added":0, "skipped":len(STARTER_CASES)}
+        try:
+            installed = self.lab.inventory()
+        except (RuntimeError, OSError):
+            return 503, {"error":"The local model inventory is unavailable. Start your inference service and retry."}
+        names = {item["name"] for item in installed}
+        model = preferred if isinstance(preferred, str) and preferred in names else choose_model(installed)
+        if not model:
+            return 409, {"error":"Install a local chat model before adding starter cases."}
+
+        # Freeze the prompt, sources, history and seed. Neither arm reads personal memories.
+        common = {"model":model, "seed":42, "context_length":2048, "memory_enabled":False,
+                  "retrieval_mode":"off", "routing_mode":"fixed", "workflow":"direct"}
+        with self.lab._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            remaining = missing(db)
+            for key, case in remaining:
+                configs = [{**common, "temperature":temp, "tool_mode":policy if key=="calculator" else "off"}
+                           for temp, policy in ((0.0, "natural"), (0.6, "commands"))]
+                record = self.lab.case_values(starter_id(key), {**case, "configs":configs})
+                db.execute("INSERT INTO lab_cases (id,created_at,name,snapshot) VALUES (?,?,?,?)", record)
+        count = len(remaining)
+        return (201 if count else 200), {"added":count, "skipped":len(STARTER_CASES)-count, "model":model}
+
     def run_suite(self, rows, identifier):
         status = "completed"
         try:
@@ -74,6 +151,8 @@ class Evaluation:
                 self.lab._busy.release()
 
     def route(self, method, path, body):
+        if method == "POST" and path == "/api/lab/cases/starters":
+            return self.add_starters((body or {}).get("model"))
         if path.startswith("/api/lab/judgments/") and method == "POST":
             identifier = path.split("/")[-1]
             record = self.lab.experiment(identifier)
