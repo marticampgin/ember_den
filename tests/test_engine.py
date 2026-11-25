@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from den.capabilities import calculate
-from den.engine import Engine, validate_config
+from den.engine import Engine, protected, validate_config
 from den.provider import Ollama, ProviderError, VisibleContent
 from den.server import Application, Handler
 from den.store import ConflictError, Store
@@ -132,6 +132,11 @@ class EngineTests(unittest.TestCase):
         self.assertTrue(run["redacted"])
         self.assertNotIn("secret_example", self.store.conversations()[0]["title"])
         self.assertIn("secret_example", self.store.conversation(stream[0]["conversation_id"])["messages"][0]["content"])
+        values = {"password": "pass with spaces", "content": "password='with spaces', Authorization: Basic abc123",
+                  "cert": "-----BEGIN PRIVATE KEY-----\nsensitive\n-----END PRIVATE KEY-----"}
+        masked = json.dumps(protected(values))
+        for value in ("with spaces", "abc123", "sensitive"):
+            self.assertNotIn(value, masked)
 
     def test_settings_and_lab_replay_isolation(self):
         self.engine.save_settings({"temperature": 1.2, "memory_enabled": False})
