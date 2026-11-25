@@ -58,7 +58,8 @@ function confirmRemove(memory, refresh) {
     const error = el('p', 'form-error');
     error.setAttribute('role', 'alert');
     error.hidden = true;
-    dialog.append(excerpt, error, actions);
+    const scope = el('p', 'delete-prompt', 'Ember will stop retrieving this memory. Earlier conversations and saved run snapshots keep their original text.');
+    dialog.append(excerpt, scope, error, actions);
   });
 }
 

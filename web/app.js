@@ -272,8 +272,7 @@ function renderCompanion(page) {
   page.querySelector('#composer').onsubmit = event => {
     event.preventDefault();
     if (activeJob?.chat === activeChat) {
-      if (activeJob.runId) api('/api/runs/' + encodeURIComponent(activeJob.runId) + '/stop', {method: 'POST', body: {}}).catch(() => {});
-      activeJob.controller.abort();
+      stopResponse(activeJob);
       return;
     }
     if (!activeJob && !page.querySelector('#send').disabled && input.value.trim()) sendMessage(activeChat, input.value.trim());
@@ -357,13 +356,26 @@ function updateCompanionControls() {
   main.querySelector('.companion-state').dataset.state = state;
   const send = main.querySelector('#send');
   send.classList.toggle('is-stop', mine);
-  send.innerHTML = mine ? icon('stop', 15) + 'Stop' : icon('send', 21);
+  send.innerHTML = mine ? icon('stop', 15) + (activeJob.stopping ? 'Stopping…' : 'Stop') : icon('send', 21);
   send.title = mine ? 'Stop response' : 'Send message';
   send.setAttribute('aria-label', send.title);
-  send.disabled = !mine && (Boolean(activeJob) || lastStatus === 'running' || !activeChat.draft.trim());
+  send.disabled = mine ? Boolean(activeJob.stopping) : Boolean(activeJob) || lastStatus === 'running' || !activeChat.draft.trim();
   main.querySelector('.view-companion').classList.toggle('has-messages', activeChat.messages.length > 0);
   main.querySelector('#transcript').setAttribute('aria-busy', String(mine));
   main.querySelector('.starter-list').hidden = activeChat.messages.length > 0;
+}
+
+async function stopResponse(job) {
+  if (job.stopping) return;
+  job.stopping = true;
+  updateCompanionControls();
+  try {
+    if (job.runId) {
+      await api('/api/runs/' + encodeURIComponent(job.runId) + '/stop', {method: 'POST', body: {}, keepalive: true});
+    }
+  } catch {
+    // Closing the stream also releases inference when the stop endpoint is unavailable.
+  } finally { job.controller.abort(); }
 }
 
 async function consumeStream(response, handle) {
@@ -440,7 +452,7 @@ async function sendMessage(chat, prompt) {
     if (!completed) throw new Error('The local connection ended before the response finished.');
     user.status = 'completed';
   } catch (error) {
-    const stopped = error.name === 'AbortError';
+    const stopped = job.stopping || error.name === 'AbortError';
     user.status = stopped ? 'stopped' : 'error';
     user.error = stopped ? 'Response stopped.' : error.message;
   } finally {

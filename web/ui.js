@@ -38,9 +38,9 @@ export function el(tag, className, text) {
   return node;
 }
 
-export async function api(path, {method = 'GET', body, signal} = {}) {
+export async function api(path, {method = 'GET', body, signal, keepalive = false} = {}) {
   const response = await fetch(path, {
-    method, signal,
+    method, signal, keepalive,
     headers: body === undefined ? undefined : {'Content-Type': 'application/json'},
     body: body === undefined ? undefined : JSON.stringify(body),
   });
