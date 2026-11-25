@@ -91,13 +91,13 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
     const missing = cfg.model && !installed.some(m => m.name === cfg.model);
     const selected = installed.find(m => m.name === cfg.model);
     const opts = installed.map(m => `<option value="${escape(m.name)}" ${m.name===cfg.model ? 'selected' : ''}>${escape(m.name)}</option>`).join('');
-    const scalar = (key,title,min,max,step) => `<label>${title}<input name="${key}${index}" data-config="${index}" data-key="${key}" type="number" required min="${min}" max="${max}" step="${step}" value="${escape(cfg[key])}"></label>`;
+    const scalar = (key,title,min,max,step,optional=false) => `<label>${title}<input name="${key}${index}" data-config="${index}" data-key="${key}" type="number" ${optional ? 'placeholder="Runtime default"' : 'required'} min="${min}" max="${max}" step="${step}" value="${escape(cfg[key])}"></label>`;
     return `<section class="lab-config" aria-label="Configuration ${label}">
       <header><span class="lab-letter">${label}</span><h3>Configuration ${label}</h3></header>
       <label>Model<select required name="model${index}" data-config="${index}" data-key="model" ${installed.length ? '' : 'disabled'}>${missing ? `<option selected value="${escape(cfg.model)}">${escape(cfg.model)} (unavailable)</option>` : ''}${opts || '<option value="">No installed models</option>'}</select></label>
       <p class="lab-model-spec" data-spec="${index}">${escape([selected?.family, selected?.parameters, selected?.quantization].filter(Boolean).join(' · '))}</p>
       <div class="lab-fields">${scalar('temperature','Temperature',0,2,0.01)}${scalar('context_length','Context window',1024,16384,1)}</div>
-      <details class="lab-advanced"><summary>Advanced settings</summary><div>${scalar('seed','Random seed',0,2147483647,1)}<label>System prompt<textarea rows="3" maxlength="4000" data-config="${index}" data-key="system_prompt">${escape(cfg.system_prompt)}</textarea></label></div></details>
+      <details class="lab-advanced"><summary>Advanced settings</summary><div>${scalar('seed','Random seed',0,2147483647,1,true)}<label>System prompt<textarea rows="3" maxlength="4000" data-config="${index}" data-key="system_prompt">${escape(cfg.system_prompt)}</textarea></label></div></details>
     </section>`;
   }
   function form() {
@@ -272,7 +272,7 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
         draft.source_redacted=!!captured.redacted;
         draft.context=captured.context || []; draft.history=captured.history || [];
         const selectedModel = captured.route==='calculator' ? draft.configs[0].model : captured.model;
-        draft.configs[0]={...draft.configs[0],...captured.config,model:selectedModel,seed:captured.config?.seed ?? 42};
+        draft.configs[0]={...draft.configs[0],...captured.config,model:selectedModel,seed:captured.config?.seed ?? null};
         render();break;
       }
     }

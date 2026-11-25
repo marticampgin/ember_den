@@ -127,6 +127,10 @@ def live_conversation(page, url, options):
     expect(page.locator(".lab-references")).to_contain_text("field-notes.md")
     page.locator('[data-action="use-trace"]').click()
     expect(page.get_by_label("Test prompt")).to_contain_text("kingfisher")
+    seed = page.locator('input[name="seed0"]')
+    expect(seed).to_have_value("")
+    expect(seed).to_have_attribute("placeholder", "Runtime default")
+    assert not seed.evaluate("el => el.required")
     second = page.locator('select[name="model1"]')
     alternate = "LiquidAI/lfm2.5-2.6b:latest"
     if alternate in {model["name"] for model in status["models"]} and alternate != run["model"]:
@@ -139,6 +143,7 @@ def live_conversation(page, url, options):
     expect(page.locator(".lab-result [data-state='completed']")).to_have_count(2, timeout=240000)
     results_id = page.request.get(url + "/api/lab/experiments").json()["experiments"][0]["id"]
     result = page.request.get(url + "/api/lab/experiments/" + results_id).json()
+    assert result["snapshot"]["configs"][0]["seed"] is None
     assert all(arm["run"]["context"] == run["context"] for arm in result["results"])
     assert all(arm["check"] is True for arm in result["results"]), "An answer omitted the callsign"
     assert page.request.get(url + "/api/settings").json() == status["settings"]

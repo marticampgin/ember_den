@@ -32,6 +32,12 @@ def _configuration(raw):
     return validate_config(raw)
 
 
+def _stored_snapshot(snapshot):
+    stored = protected(snapshot)
+    stored["redacted"] = stored != snapshot
+    return stored
+
+
 def _snapshot(raw):
     if not isinstance(raw, dict):
         raise ValueError("A comparison requires a JSON object.")
@@ -171,8 +177,7 @@ class Laboratory:
                            if old.get("digest") != new.get("digest")]
                 if changed:
                     snapshot["changed_models"] = changed
-            stored = protected(snapshot)
-            stored["redacted"] = stored != snapshot
+            stored = _stored_snapshot(snapshot)
             identifier, created_at = uuid.uuid4().hex, _now()
             results = [{"label": label, "status": "pending", "run": None, "check": None, "error": None}
                        for label in ("A", "B")]
@@ -215,7 +220,7 @@ class Laboratory:
                 identifier = uuid.uuid4().hex
                 with self._db() as db:
                     db.execute("INSERT INTO lab_cases VALUES (?, ?, ?, ?)",
-                               (identifier, _now(), protected(name), json.dumps(protected(snapshot))))
+                               (identifier, _now(), protected(name), json.dumps(_stored_snapshot(snapshot))))
                 return 201, {"id": identifier}
             if method == "GET":
                 with self._db() as db:
@@ -230,5 +235,9 @@ class Laboratory:
                 if method == "DELETE":
                     db.execute("DELETE FROM lab_cases WHERE id=?", (match[1],))
                     return 200, {"id": match[1]}
-            return 200, {**dict(row), "snapshot": json.loads(row["snapshot"])}
+            snapshot = json.loads(row["snapshot"])
+            if "redacted" not in snapshot:
+                # Cases saved by the first release contain masked values without a provenance flag.
+                snapshot["redacted"] = "[redacted]" in row["snapshot"]
+            return 200, {**dict(row), "snapshot": snapshot}
         return None

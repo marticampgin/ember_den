@@ -1,3 +1,6 @@
+from contextlib import closing
+import json
+import sqlite3
 import tempfile
 import threading
 import time
@@ -85,7 +88,19 @@ class LaboratoryTest(unittest.TestCase):
         status, case = self.lab.route("POST", "/api/lab/cases", {**self.input, "name": "Credential check"})
         self.assertEqual(status, 201)
         path = f"/api/lab/cases/{case['id']}"
-        self.assertIn("[redacted]", self.lab.route("GET", path)[1]["snapshot"]["prompt"])
+        saved = self.lab.route("GET", path)[1]["snapshot"]
+        self.assertIn("[redacted]", saved["prompt"])
+        self.assertTrue(saved["redacted"])
+        self.assertIsNone(saved["configs"][0]["seed"])
+        _, case_run = self.lab.route("POST", "/api/lab/experiments", saved)
+        case_result = self.finish(case_run["id"])
+        self.assertTrue(case_result["snapshot"]["source_redacted"])
+        self.assertIsNone(case_result["results"][0]["run"]["config"]["seed"])
+        # Older saved cases had the mask in their text but no explicit provenance field.
+        del saved["redacted"]
+        with closing(sqlite3.connect(self.db)) as db, db:
+            db.execute("UPDATE lab_cases SET snapshot=? WHERE id=?", (json.dumps(saved), case["id"]))
+        self.assertTrue(self.lab.route("GET", path)[1]["snapshot"]["redacted"])
         comparison = self.finish(self.start())
         self.assertTrue(comparison["snapshot"]["redacted"])
         self.assertNotIn("abcdef12345", str(comparison))
