@@ -13,6 +13,7 @@ import threading
 import uuid
 
 from .engine import protected, validate_config
+from .evaluation import Evaluation, check_answer
 
 
 def _now():
@@ -60,7 +61,12 @@ def _snapshot(raw):
     source = raw.get("source_run_id")
     if source is not None:
         _text(source, "Source run", 128, required=True)
+    check_mode = raw.get("check_mode", "contains")
+    if check_mode not in ("contains", "exact", "json", "source"):
+        raise ValueError("Unknown evaluation check.")
     return {
+        "check_mode": check_mode,
+        "live_retrieval": raw.get("live_retrieval") is True,
         "prompt": _text(raw.get("prompt"), "Prompt", 12000, True),
         "expected": _text(raw.get("expected", ""), "Expected text", 2000).strip(),
         "configs": [_configuration(config) for config in configs],
@@ -94,6 +100,8 @@ class Laboratory:
                 );
             """)
 
+        self.evaluation = Evaluation(self)
+
     @contextmanager
     def _db(self):
         db = sqlite3.connect(self.db_path, timeout=15)
@@ -122,27 +130,35 @@ class Laboratory:
             for result in results:
                 if result["status"] in {"running", "pending"}:
                     result.update(status="interrupted", error="The local server stopped before this run finished.")
-        return {**summary, "snapshot": json.loads(row["snapshot"]), "results": results}
+        with self._db() as db:
+            review = db.execute("SELECT preference FROM lab_reviews WHERE experiment_id=?", (identifier,)).fetchone()
+            judgment = db.execute("SELECT model,run_id,assessment FROM lab_judgments WHERE experiment_id=?",
+                                  (identifier,)).fetchone()
+        return {**summary, "snapshot": json.loads(row["snapshot"]), "results": results,
+                "preference": review["preference"] if review else None, "judgment": dict(judgment) if judgment else None}
 
     def _update(self, identifier, status, results):
         with self._db() as db:
             db.execute("UPDATE lab_experiments SET status=?, results=?, updated_at=? WHERE id=?",
                            (status, json.dumps(protected(results)), _now(), identifier))
 
-    def _execute(self, identifier, snapshot, results):
+    def _execute(self, identifier, snapshot, results, release=True, frozen=None):
         try:
             for index, config in enumerate(snapshot["configs"]):
                 result = results[index]
                 result["status"] = "running"
                 self._update(identifier, "running", results)
                 try:
+                    context = None if snapshot.get("live_retrieval") else snapshot["context"]
+                    if frozen is not None:
+                        context = frozen[index]
                     run = self.run_config(snapshot["prompt"], deepcopy(config),
-                                          context=deepcopy(snapshot["context"]), history=deepcopy(snapshot["history"]))
+                                          context=deepcopy(context), history=deepcopy(snapshot["history"]))
                     result["run"] = run
                     result["status"] = "completed" if run["status"] == "completed" else "failed"
                     result["error"] = run.get("error") or None
-                    if snapshot["expected"] and result["status"] == "completed":
-                        result["check"] = snapshot["expected"].casefold() in run["response"].casefold()
+                    if result["status"] == "completed":
+                        result["check"] = check_answer(snapshot.get("check_mode","contains"), snapshot["expected"], run)
                 except (ValueError, RuntimeError, OSError) as error:
                     result.update(status="failed", error=str(error))
                 self._update(identifier, "running", results)
@@ -157,10 +173,11 @@ class Laboratory:
             self._update(identifier, status, results)
             raise
         finally:
-            self._busy.release()
+            if release:
+                self._busy.release()
 
-    def _start(self, snapshot, replay_of=None, previous_models=None):
-        if not self._busy.acquire(blocking=False):
+    def _start(self, snapshot, replay_of=None, previous_models=None, *, in_suite=False, frozen=None):
+        if not in_suite and not self._busy.acquire(blocking=False):
             return 409, {"error": "A comparison is already running. Open History to follow its progress."}
         started = False
         try:
@@ -185,16 +202,21 @@ class Laboratory:
                 db.execute("INSERT INTO lab_experiments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                            (identifier, created_at, created_at, self._session, stored["prompt"], "running",
                             json.dumps(stored), json.dumps(results), replay_of))
-            worker = threading.Thread(target=self._execute, args=(identifier, snapshot, results),
-                                      name="lab-comparison", daemon=True)
-            worker.start()
+            if in_suite:
+                self._execute(identifier, snapshot, results, release=False)
+            else:
+                threading.Thread(target=self._execute, args=(identifier, snapshot, results, True, frozen),
+                                 name="lab-comparison", daemon=True).start()
             started = True
         finally:
-            if not started:
+            if not started and not in_suite:
                 self._busy.release()
         return 202, {"id": identifier}
 
     def route(self, method, path, body=None):
+        extension = self.evaluation.route(method, path, body)
+        if extension is not None:
+            return extension
         if path == "/api/lab/experiments":
             if method == "POST":
                 return self._start(_snapshot(body))
@@ -211,8 +233,10 @@ class Laboratory:
             if method == "GET" and not match[2]:
                 return 200, experiment
             if method == "POST" and match[2]:
+                refs = [(arm.get("run") or {}).get("context", experiment["snapshot"]["context"])
+                        for arm in experiment["results"]]
                 return self._start(_snapshot(experiment["snapshot"]), experiment["id"],
-                                   experiment["snapshot"].get("models"))
+                                   experiment["snapshot"].get("models"), frozen=refs)
         if path == "/api/lab/cases":
             if method == "POST":
                 snapshot = _snapshot(body)
