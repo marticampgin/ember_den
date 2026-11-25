@@ -1,5 +1,6 @@
 """Exercise chat commands, reviewed file approvals, and the optional live public-source flow."""
 import argparse
+import re
 import time
 from pathlib import Path
 
@@ -56,6 +57,27 @@ def verify(page, url, live, screenshots):
             expect(page.locator("#toast")).to_be_hidden(timeout=8000)
             page.evaluate("window.scrollTo(0, 0)")
             page.screenshot(path=screenshots/"tools-live-weather.png",full_page=True)
+        page.get_by_label("Lookup method").select_option("news_search")
+        page.get_by_label("News topic").fill("")
+        page.get_by_role("button",name="Look up",exact=True).click()
+        expect(page.locator(".tools-hit small").first).to_have_text(re.compile(r" · \d{4}-\d{2}-\d{2}$"),timeout=25000)
+        assert len({label.split(" · ")[0] for label in page.locator(".tools-hit small").all_text_contents()}) >= 2
+        if screenshots:
+            page.screenshot(path=screenshots/"tools-live-news.png",full_page=True)
+        page.get_by_label("Lookup method").select_option("web_search")
+        page.get_by_label("Web search query").fill("Python programming")
+        page.get_by_role("button",name="Look up",exact=True).click()
+        expect(page.locator(".tools-hit a").first).to_have_attribute("href",re.compile(r"^https://"),timeout=25000)
+        check_layout(page)
+        print("Web results:",page.locator(".tools-hit small").all_text_contents())
+        page.get_by_role("link",name="Companion",exact=True).click()
+        prompt.fill("latest headlines");prompt.press("Enter")
+        expect(page.locator(".from-ember .message-body").last).to_contain_text("Feeds checked",timeout=25000)
+        news=page.request.get(url+"/api/runs").json()["runs"][0]
+        page.goto(url+"/#laboratory/trace/"+news["id"])
+        page.get_by_text(re.compile(r"Retrieved references \(\d+\)")).click()
+        first=page.locator(".lab-references a").first
+        expect(first).to_have_attribute("href",re.compile(r"^https://www\.(?:bbc\.co\.uk|bbc\.com|npr\.org|theguardian\.com)/"))
         page.get_by_role("link",name="Companion",exact=True).click()
         prompt.fill("Research Wikipedia for red fox");prompt.press("Enter")
         expect(page.locator(".from-ember .message-body").last).to_contain_text("Vulpes vulpes",timeout=25000)
@@ -108,7 +130,7 @@ def verify(page, url, live, screenshots):
 if __name__=="__main__":
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--browser",help="Chromium-family browser executable")
-    parser.add_argument("--live",action="store_true",help="Query Wikipedia for red fox and Open-Meteo for Berlin.")
+    parser.add_argument("--live",action="store_true",help="Check Wikipedia, Open-Meteo, current publisher headlines, and general web search.")
     parser.add_argument("--screenshots",type=Path)
     options=parser.parse_args()
     with test_server() as url,sync_playwright() as pw:

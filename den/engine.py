@@ -210,6 +210,7 @@ class Engine:
                     detail += f" Recorded catalog {original_revision} differs from the current catalog."
                 yield stage("Tool execution", detail)
                 model = {"wiki_search": "Wikipedia", "wiki_research": "Wikipedia",
+                         "news_search": "Publisher RSS", "web_search": "Web search",
                          "weather": "Open-Meteo", "calculator": "Local calculator"}.get(route, "Local tools")
                 result_context = tool.get("context", [])
                 for event in tool.get("events", []):

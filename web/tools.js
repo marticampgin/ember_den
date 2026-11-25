@@ -1,4 +1,5 @@
 import {el} from './ui.js';
+import {publicSourceUrl, sourceAttribution} from './public-source.js';
 
 const css = document.createElement('link');
 css.rel = 'stylesheet';
@@ -27,10 +28,10 @@ function details(label, content) {
   return node;
 }
 function sourceLink(hit) {
-  const link = el('a','tools-source',hit.name);
-  const url = new URL(hit.url);
-  if (url.protocol === 'https:' && ((url.host === 'en.wikipedia.org' && url.pathname === '/') || (url.host === 'api.open-meteo.com' && url.pathname === '/v1/forecast')) && !url.username && !url.password) {
-    link.href = url.href;
+  const url = publicSourceUrl(hit);
+  const link = el(url ? 'a' : 'strong','tools-source',hit.name);
+  if (url) {
+    link.href = url;
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
   }
@@ -41,6 +42,7 @@ export function mountTools(root, {api, notify = () => {}}) {
   const controller = new AbortController();
   const call = (path, options={}) => api(path,{...options,signal:controller.signal});
   let approvedFolder = '';
+  let searchProvider = 'Mwmbl';
   const heading = el('header','page-heading');
   const headingText = el('div');
   headingText.append(el('h1','','Tools'),el('p','page-subtitle','Look up a public source or prepare a local export.'));
@@ -53,17 +55,26 @@ export function mountTools(root, {api, notify = () => {}}) {
   query.name = 'query'; query.maxLength = 240; query.required = true;
   query.placeholder = 'Search for a topic';
   const method = el('select'); method.name = 'method';
-  for (const [value,label] of [['wiki_search','Search articles'],['wiki_research','Search and read the first article'],['weather','Current weather and three-day outlook']]) {
+  for (const [value,label] of [['wiki_search','Search Wikipedia articles'],['wiki_research','Read the first Wikipedia article'],['news_search','Recent publisher headlines'],['web_search','General web search'],['weather','Current weather and three-day outlook']]) {
     const option = el('option','',label); option.value=value; method.append(option);
   }
   const look = button('Look up',true); look.type='submit';
   const queryField=field('Wikipedia query',query);
+  function updateMethod() {
+    const settings = {
+      weather: ['Place name','City and optional country code, e.g. Berlin, DE','Open-Meteo receives the place name and coordinates to retrieve the forecast.'],
+      news_search: ['News topic','Headlines or a topic','Search the past seven days of headlines from BBC News, The Guardian and NPR. Your topic stays on this computer.'],
+      web_search: ['Web search query','Search across websites',searchProvider === 'SearXNG' ? 'Your local SearXNG server passes the query to its configured search engines.' : 'Mwmbl receives your query and returns results from its public web index.'],
+    };
+    const [label, hint, description] = settings[method.value] || ['Wikipedia query','Search for a topic','Only your search query is sent to English Wikipedia.'];
+    queryField.firstChild.textContent=label;
+    query.placeholder=hint;
+    query.maxLength=method.value==='weather'?120:240;
+    query.required=method.value!=='news_search';
+    lookupDescription.textContent=description;
+  }
   method.onchange=()=>{
-    const weather=method.value==='weather';
-    queryField.firstChild.textContent=weather?'Place name':'Wikipedia query';
-    query.placeholder=weather?'City and optional country code, e.g. Berlin, DE':'Search for a topic';
-    query.maxLength=weather?120:240;
-    lookupDescription.textContent=weather?'Open-Meteo receives your place name and coordinates to retrieve the forecast. Its personal-use API needs no key.':'Only your search query is sent to English Wikipedia.';
+    updateMethod();
     hits.replaceChildren();
   };
   lookupForm.append(field('Lookup method',method),queryField,look);
@@ -103,6 +114,8 @@ export function mountTools(root, {api, notify = () => {}}) {
     const state=await call('/api/tools');
     error.textContent='';
     approvedFolder=state.directory;
+    searchProvider=state.search_provider || 'Mwmbl';
+    updateMethod();
     approvalList.replaceChildren();
     if(!state.pending.length) approvalList.append(el('p','tools-empty','No exports awaiting approval.'));
     for(const item of state.pending) {
@@ -154,12 +167,24 @@ export function mountTools(root, {api, notify = () => {}}) {
   lookupForm.onsubmit=async event=>{
     event.preventDefault();look.disabled=method.disabled=query.disabled=true;
     const weather=method.value==='weather';
-    hits.replaceChildren(el('p','tools-feedback',weather?'Contacting Open-Meteo…':'Contacting Wikipedia…'));
+    const source = {weather:'Open-Meteo',news_search:'publisher feeds',web_search:searchProvider}[method.value] || 'Wikipedia';
+    hits.replaceChildren(el('p','tools-feedback','Checking '+source+'…'));
     try {
-      const result=await call('/api/tools/run',{method:'POST',body:{tool:method.value,arguments:weather?{place:query.value}:{query:query.value}}});
+      const term=method.value==='news_search' && !query.value.trim()?'headlines':query.value;
+      const result=await call('/api/tools/run',{method:'POST',body:{tool:method.value,arguments:weather?{place:term}:{query:term}}});
       hits.replaceChildren();
+      if(result.notice) hits.append(el('p','tools-feedback',result.notice));
       for(const hit of result.context || []) {
-        const article=el('article','tools-hit');article.append(sourceLink(hit),el('p','',hit.text));hits.append(article);
+        const article=el('article','tools-hit');
+        article.append(sourceLink(hit));
+        const attribution=sourceAttribution(hit);
+        if(attribution) {
+          const byline=el('p');
+          byline.append(el('small','',attribution));
+          article.append(byline);
+        }
+        if(hit.text) article.append(el('p','',hit.text));
+        hits.append(article);
       }
       if(!hits.children.length)hits.append(el('p','tools-feedback',result.response));
       await refresh();

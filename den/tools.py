@@ -17,6 +17,7 @@ from urllib.parse import urlencode
 import uuid
 
 from .engine import protected
+from .news import PublisherNews, WebSearch
 
 
 def now():
@@ -171,18 +172,22 @@ def fold_line(value):
 
 
 class Tools:
-    def __init__(self, data_dir, public_source=None, weather_source=None):
+    def __init__(self, data_dir, public_source=None, weather_source=None, news_source=None, search_source=None):
         self.root = Path(data_dir).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.db_path = self.root / "ember.sqlite3"
         self.exports = self.root / "exports"
         self.public = public_source or Wikipedia()
         self.weather = weather_source or OpenMeteo()
+        self.news = news_source or PublisherNews()
+        self.web_search = search_source or WebSearch()
         self.registry = {}
         for tool in (
             Tool("wiki_search","Search Wikipedia","/web","/web red fox","public read",(("query",240),),self._search),
             Tool("wiki_research","Read the first article","/research","/research red fox","public read",(("query",240),),self._research),
             Tool("weather","Check local weather","/weather","/weather Berlin, DE","public read",(("place",120),),self._weather),
+            Tool("news_search","Search publisher headlines","/news","/news headlines","public read",(("query",240),),self._news),
+            Tool("web_search","Search the web","/search","/search Python programming","public read",(("query",240),),self._web_search),
             Tool("export_note","Export a text note","/note","/note Title | Note text","approval required",(("title",120),("body",8000)),self._note),
             Tool("export_event","Export a calendar event","/event","/event YYYY-MM-DD | Event title","approval required",(("date",10),("title",120)),self._event),
         ):
@@ -243,6 +248,14 @@ class Tools:
 
     def _research(self, args):
         return self._lookup(args,True)
+
+    def _news(self, args):
+        return self.news.search(args["query"])
+
+    def _web_search(self, args):
+        if args["query"] != protected(args["query"]):
+            raise ValueError("Remove credentials from the public search query.")
+        return self.web_search.search(args["query"])
 
     def _weather(self, args):
         if args["place"] != protected(args["place"]):
@@ -392,7 +405,7 @@ class Tools:
             resolved = [dict(row) for row in db.execute("SELECT id,tool,title,filename,created_at,status FROM tool_proposals WHERE status!='pending' ORDER BY rowid DESC LIMIT 15")]
             recent = [{**dict(row),"arguments":json.loads(row["arguments"])} for row in db.execute("SELECT * FROM tool_activity ORDER BY rowid DESC LIMIT 35")]
         return {"tools":[item.describe() for item in self.registry.values()], "directory":str(self.exports),
-                "pending":pending,"resolved":resolved,"activity":recent}
+                "pending":pending,"resolved":resolved,"activity":recent,"search_provider":self.web_search.name}
 
     def route(self,method,path,body):
         if path=="/api/tools" and method=="GET":
@@ -410,10 +423,16 @@ class Tools:
         command, _, value = raw.partition(" ")
         tool = next((item for item in self.registry.values() if item.command == command.lower()), None)
         if tool:
+            if tool.name == "news_search" and not value.strip():
+                value = "headlines"
             values = [value] if len(tool.fields)==1 else value.split("|",maxsplit=len(tool.fields)-1)
             return tool, {key:v for (key,_),v in zip(tool.fields,values)}
+        if re.fullmatch(r"(?:show me (?:the )?)?latest headlines[?.!]?", raw, re.IGNORECASE):
+            return self.registry["news_search"], {"query":"headlines"}
         phrases = (
             (r"search wikipedia for\s+(.+)", "wiki_search"),
+            (r"search (?:the )?news for\s+(.+)", "news_search"),
+            (r"search the web for\s+(.+)", "web_search"),
             (r"research wikipedia for\s+(.+)", "wiki_research"),
             (r"(?:what(?: is|['’]s) the )?weather(?: like)? in\s+(.+?)\??", "weather"),
             (r"draft a note titled\s+(.+?)\s+(?:with (?:the )?(?:text|body)|saying)\s+(.+)", "export_note"),

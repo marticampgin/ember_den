@@ -1,3 +1,4 @@
+import {publicSourceUrl, sourceAttribution} from './public-source.js';
 import {advancedConfig, profileDialog} from './configuration.js';
 import {renderResponse} from './ui.js';
 const stylesheet = document.createElement('link');
@@ -67,12 +68,11 @@ function capturedReferences(refs = []) {
     }
     if (item.kind==='web') {
       const title = escape(item.name || 'Public source');
-      const sourceUrl = item.url || '';
-      const allowed = /^https:\/\/en\.wikipedia\.org\/\?curid=\d+$/.test(sourceUrl)
-        || /^https:\/\/api\.open-meteo\.com\/v1\/forecast\?[A-Za-z0-9_.,%=&-]+$/.test(sourceUrl);
-      const linked = allowed
-        ? `<a href="${escape(item.url)}" target="_blank" rel="noopener noreferrer">${title} ↗</a>` : title;
-      return `<li><strong>${linked}</strong><p>${escape(item.text)}</p></li>`;
+      const url = publicSourceUrl(item);
+      const linked = url
+        ? `<a href="${escape(url)}" target="_blank" rel="noopener noreferrer">${title} ↗</a>` : title;
+      const attribution = sourceAttribution(item);
+      return `<li><strong>${linked}</strong>${attribution ? `<p>${escape(attribution)}</p>` : ''}<p>${escape(item.text)}</p></li>`;
     }
     const name = item.kind==='document' ? (item.name || 'Document') + lines : 'Saved memory';
     return `<li><strong>${escape(name)}</strong><p>${escape(item.text)}</p></li>`;
