@@ -39,6 +39,24 @@ def _stored_snapshot(snapshot):
     return stored
 
 
+def changed_pass_revisions(results, installed):
+    """Check the actual models a prior execution used, including routed and fallback passes."""
+    changes = []
+    for arm in results:
+        run = arm.get("run") or {}
+        for step in run.get("workflow_passes", []):
+            model = step.get("model")
+            original = step.get("digest")
+            if not model or not original:
+                continue
+            present = model in installed
+            current = installed[model].get("digest") if present else None
+            if original != current:
+                changes.append({"arm": arm["label"], "role": step["role"], "model": model,
+                                "previous_digest": original, "current_digest": current, "available": present})
+    return changes
+
+
 def _snapshot(raw):
     if not isinstance(raw, dict):
         raise ValueError("A comparison requires a JSON object.")
@@ -176,7 +194,7 @@ class Laboratory:
             if release:
                 self._busy.release()
 
-    def _start(self, snapshot, replay_of=None, previous_models=None, *, in_suite=False, frozen=None):
+    def _start(self, snapshot, *, previous=None, in_suite=False, frozen=None):
         if not in_suite and not self._busy.acquire(blocking=False):
             return 409, {"error": "A comparison is already running. Open History to follow its progress."}
         started = False
@@ -189,7 +207,11 @@ class Laboratory:
                 if config["model"] not in installed:
                     return 400, {"error": f"The local model {config['model']} is unavailable."}
             snapshot["models"] = [deepcopy(installed[config["model"]]) for config in snapshot["configs"]]
-            if previous_models:
+            if previous:
+                roles = changed_pass_revisions(previous["results"], installed)
+                if roles:
+                    snapshot["changed_roles"] = roles
+                previous_models = previous["snapshot"].get("models", [])
                 changed = [label for label, old, new in zip(("A", "B"), previous_models, snapshot["models"])
                            if old.get("digest") != new.get("digest")]
                 if changed:
@@ -201,7 +223,7 @@ class Laboratory:
             with self._db() as db:
                 db.execute("INSERT INTO lab_experiments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                            (identifier, created_at, created_at, self._session, stored["prompt"], "running",
-                            json.dumps(stored), json.dumps(results), replay_of))
+                            json.dumps(stored), json.dumps(results), previous["id"] if previous else None))
             if in_suite:
                 self._execute(identifier, snapshot, results, release=False)
             else:
@@ -235,8 +257,7 @@ class Laboratory:
             if method == "POST" and match[2]:
                 refs = [(arm.get("run") or {}).get("context", experiment["snapshot"]["context"])
                         for arm in experiment["results"]]
-                return self._start(_snapshot(experiment["snapshot"]), experiment["id"],
-                                   experiment["snapshot"].get("models"), frozen=refs)
+                return self._start(_snapshot(experiment["snapshot"]), previous=experiment, frozen=refs)
         if path == "/api/lab/cases":
             if method == "POST":
                 snapshot = _snapshot(body)

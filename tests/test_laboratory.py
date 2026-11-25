@@ -113,6 +113,36 @@ class LaboratoryTest(unittest.TestCase):
         with self.assertRaises(KeyError):
             self.lab.route("GET", path)
 
+    def test_replay_records_changed_and_missing_auxiliary_model_revisions(self):
+        self.models.extend([{"name": "router", "digest": "router-v1"},
+                            {"name": "specialist", "digest": "draft-v1"},
+                            {"name": "reviewer", "digest": "review-v1"}])
+        def routed(*args, **kwargs):
+            run = self.infer(*args, **kwargs)
+            inventory = {item["name"]: item["digest"] for item in self.models}
+            run["workflow_passes"] = [{"role": role, "model": name, "digest": inventory[name]}
+                                      for role, name in (("router", "router"), ("draft", "specialist"),
+                                                         ("revision", "reviewer")) if name in inventory]
+            return run
+        self.lab.run_config = routed
+        first = self.finish(self.start())
+        self.models[1]["digest"] = "router-v2"
+        self.models.pop()  # The reviewer was removed after the original execution.
+        _, replay = self.lab.route("POST", f"/api/lab/experiments/{first['id']}/replay", {})
+        result = self.finish(replay["id"])["snapshot"]
+        self.assertNotIn("changed_models", result)
+        expected = []
+        for arm in ("A", "B"):
+            expected += [
+                {"arm": arm, "role": "router", "model": "router", "previous_digest": "router-v1",
+                 "current_digest": "router-v2", "available": True},
+                {"arm": arm, "role": "revision", "model": "reviewer", "previous_digest": "review-v1",
+                 "current_digest": None, "available": False},
+            ]
+        self.assertEqual(result["changed_roles"], expected)
+        _, again = self.lab.route("POST", f"/api/lab/experiments/{replay['id']}/replay", {})
+        self.assertNotIn("changed_roles", self.finish(again["id"])["snapshot"])
+
     def test_reject_invalid_snapshot_and_unknown_model_before_queueing(self):
         with self.assertRaises(ValueError):
             self.lab.route("POST", "/api/lab/experiments", {**self.input, "history": [{"role":"system","content":"bad"}]})
