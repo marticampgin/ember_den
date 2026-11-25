@@ -35,6 +35,10 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(len(pcm_from_request(clip["audio"])), RATE * 2)
         code, result = self.voice.route("POST", "/api/voice/transcribe", {"audio": clip["audio"]})
         self.assertEqual((code, result["text"], result["duration_ms"]), (200, "a test", 1000))
+        self.voice.route("POST", "/api/voice/transcribe", {"audio": clip["audio"], "recognizer": "custom-installed-id"})
+        self.assertEqual(self.adapter.calls[-1][1]["recognizer"], "custom-installed-id")
+        with self.assertRaises(ValueError):
+            self.voice.route("POST", "/api/voice/transcribe", {"audio": clip["audio"], "recognizer": []})
         self.assertGreaterEqual(result["elapsed_ms"], 0)
 
     def test_invalid_inputs_do_not_reach_native_engine(self):
@@ -62,12 +66,26 @@ class VoiceTests(unittest.TestCase):
     @unittest.skipUnless(os.environ.get("EMBER_TEST_WINDOWS_SPEECH") == "1", "set EMBER_TEST_WINDOWS_SPEECH=1 for native integration")
     def test_windows_english_round_trip(self):
         voice = Voice()
-        self.assertTrue(voice.status()["recognizers"])
+        status = voice.status()
+        self.assertTrue(status["recognizers"])
+        for option in status["recognizer_options"]:
+            self.assertTrue(option["id"])
+            self.assertIn(option["culture"],status["recognizers"])
         code, clip = voice.route("POST", "/api/voice/synthesize", {"text": "Tell me a story about the moon."})
         self.assertEqual(code, 200, clip.get("error"))
         code, result = voice.route("POST", "/api/voice/transcribe", {"audio": clip["audio"]})
         self.assertEqual(code, 200, result)
         self.assertIn("moon", result["text"].casefold())
+        first = status["recognizer_options"][0]
+        for selection in (first["id"], first["culture"], "removed-recognizer"):
+            with self.subTest(selection=selection):
+                code, recognized = voice.route("POST", "/api/voice/transcribe", {"audio":clip["audio"],"recognizer":selection})
+                self.assertEqual(code,200,recognized)
+                self.assertEqual(recognized["recognizer"],first["id"])
+        for name in (status["voices"][-1], "Removed historical TTS"):
+            code, generated = voice.route("POST", "/api/voice/synthesize", {"text":"Hello.","voice":name})
+            self.assertEqual(code,200,generated.get("error"))
+            self.assertEqual(generated["voice"], name if name in status["voices"] else status["default_voice"])
 
 
 if __name__ == "__main__":

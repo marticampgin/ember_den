@@ -270,11 +270,23 @@ function renderCompanion(page) {
         <button type="submit" class="send-button" id="send"></button>
       </form>
       <div class="voice-feedback"><span role="status" data-voice-status></span><button type="button" data-voice-stop hidden>Stop voice</button></div>
-      <div class="starter-list" aria-label="Conversation starters"></div>
+      <div class="composer-actions"><div class="starter-list" aria-label="Conversation starters"></div>
+        <button type="button" class="hands-free-toggle" data-hands-free aria-pressed="false"
+          title="Automatically send each spoken turn after a pause and read replies aloud">Start hands-free</button></div>
     </div>`;
   const input = page.querySelector('#prompt');
   input.value = activeChat.draft;
-  voice = new VoiceControls(page, input, updateCompanionControls);
+  const chat = activeChat;
+  voice = new VoiceControls(page, input, updateCompanionControls, {
+    submitTurn(text) {
+      if (activeChat !== chat || activeJob || chat.messages.at(-1)?.status === 'running') return false;
+      sendMessage(chat, text);
+      return true;
+    },
+    interruptTurn() {
+      if (activeJob?.chat === chat) stopResponse(activeJob);
+    },
+  });
   input.oninput = () => {
     activeChat.draft = input.value;
     sizeInput(input);
@@ -289,7 +301,8 @@ function renderCompanion(page) {
   page.querySelector('#composer').onsubmit = event => {
     event.preventDefault();
     if (activeJob?.chat === activeChat) {
-      stopResponse(activeJob);
+      if (voice?.handsFree) voice.stop('Hands-free ended.');
+      else stopResponse(activeJob);
       return;
     }
     if (!activeJob && !page.querySelector('#send').disabled && input.value.trim()) sendMessage(activeChat, input.value.trim());
@@ -390,7 +403,8 @@ function updateCompanionControls() {
   send.disabled = mine ? Boolean(activeJob.stopping) : recording || Boolean(activeJob) || lastStatus === 'running' || !activeChat.draft.trim();
   main.querySelector('.view-companion').classList.toggle('has-messages', activeChat.messages.length > 0);
   main.querySelector('#transcript').setAttribute('aria-busy', String(mine));
-  main.querySelector('.starter-list').hidden = activeChat.messages.length > 0;
+  main.querySelector('.starter-list').hidden = activeChat.messages.length > 0 || Boolean(voice?.handsFree);
+  main.querySelector('[data-hands-free]').disabled = !voice?.handsFree && (Boolean(activeJob) || lastStatus === 'running');
 }
 
 async function stopResponse(job) {
@@ -485,6 +499,7 @@ async function sendMessage(chat, prompt) {
     const stopped = job.stopping || error.name === 'AbortError';
     user.status = stopped ? 'stopped' : 'error';
     user.error = stopped ? 'Response stopped.' : error.message;
+    if (replyVoice?.handsFree && voice === replyVoice) replyVoice.stop('Hands-free ended. ' + user.error, false);
   } finally {
     activeJob = null;
     if (assistant) Object.assign(assistant, {status: user.status, error: user.error});

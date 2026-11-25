@@ -106,7 +106,11 @@ class Voice:
             start = time.perf_counter()
             if path.endswith("/transcribe"):
                 pcm = pcm_from_request(body.get("audio"))
-                result = self.adapter.run("transcribe", {"pcm": base64.b64encode(pcm).decode("ascii")})
+                recognizer = body.get("recognizer", "")
+                if not isinstance(recognizer, str) or len(recognizer) > 300:
+                    raise ValueError("Choose an installed English recognizer.")
+                result = self.adapter.run("transcribe", {"pcm": base64.b64encode(pcm).decode("ascii"),
+                                                          "recognizer": recognizer})
                 if not result.get("text"):
                     return 422, {"error": "No clear English speech was recognized. Try again or type your message."}
                 result["duration_ms"] = round(len(pcm) * 500 / RATE)

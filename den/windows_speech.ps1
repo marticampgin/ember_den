@@ -9,22 +9,45 @@ try {
         [System.Speech.AudioFormat.AudioChannel]::Mono)
     $result = @{}
     if ($request.operation -in 'status','transcribe') {
-        $english = @([System.Speech.Recognition.SpeechRecognitionEngine]::InstalledRecognizers() |
-            Where-Object { $_.Culture.TwoLetterISOLanguageName -eq 'en' })
+        try {
+            $english = @([System.Speech.Recognition.SpeechRecognitionEngine]::InstalledRecognizers() |
+                Where-Object { $_.Culture.TwoLetterISOLanguageName -eq 'en' })
+        } catch {
+            if ($request.operation -ne 'status') { throw }
+            $english = @()
+        }
         $result.recognizers = @($english | ForEach-Object { $_.Culture.Name })
+        $result.recognizer_options = @($english | ForEach-Object {
+            @{ id = $_.Id; name = $_.Description; culture = $_.Culture.Name }
+        })
     }
     if ($request.operation -in 'status','synthesize') {
-        $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
-        $voices = @($synth.GetInstalledVoices() | Where-Object {
-            $_.Enabled -and $_.VoiceInfo.Culture.TwoLetterISOLanguageName -eq 'en'
-        } | ForEach-Object { $_.VoiceInfo.Name })
+        try {
+            $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
+            $voices = @($synth.GetInstalledVoices() | Where-Object {
+                $_.Enabled -and $_.VoiceInfo.Culture.TwoLetterISOLanguageName -eq 'en'
+            } | ForEach-Object { $_.VoiceInfo.Name })
+        } catch {
+            if ($request.operation -ne 'status') { throw }
+            $voices = @()
+        }
         $result.voices = $voices
+        if ($voices.Count) {
+            $defaultVoice = $synth.Voice.Name
+            if ($voices -notcontains $defaultVoice) { $defaultVoice = $voices[0] }
+        }
+        $result.default_voice = $defaultVoice
     }
     if ($request.operation -eq 'transcribe') {
         if (!$english.Count) {
             throw 'recognizer-unavailable'
         }
-        $recognizer = [System.Speech.Recognition.SpeechRecognitionEngine]::new($english[0])
+        $engine = $english | Where-Object { $_.Id -eq $request.recognizer } | Select-Object -First 1
+        if (!$engine) {
+            $engine = $english | Where-Object { $_.Culture.Name -eq $request.recognizer } | Select-Object -First 1
+        }
+        if (!$engine) { $engine = $english[0] }
+        $recognizer = [System.Speech.Recognition.SpeechRecognitionEngine]::new($engine)
         $recognizer.LoadGrammar([System.Speech.Recognition.DictationGrammar]::new())
         $bytes = [Convert]::FromBase64String($request.pcm)
         $memory = [IO.MemoryStream]::new($bytes, $false)
@@ -37,12 +60,11 @@ try {
         if (!$finished -or $finished.SourceEventArgs.Error) { throw 'recognition-incomplete' }
         $phrases = @(Get-Event -SourceIdentifier DenPhrase -ErrorAction SilentlyContinue |
             ForEach-Object { $_.SourceEventArgs.Result.Text })
-        $result = @{ text = $phrases -join ' '; language = $english[0].Culture.Name }
+        $result = @{ text = $phrases -join ' '; language = $engine.Culture.Name; recognizer = $engine.Id }
     } elseif ($request.operation -eq 'synthesize') {
         if (!$voices.Count) { throw 'voice-unavailable' }
         $name = $request.voice
-        if (!$name) { $name = $voices[0] }
-        if ($voices -notcontains $name) { throw 'voice-unavailable' }
+        if (!$name -or $voices -notcontains $name) { $name = $defaultVoice }
         $synth.SelectVoice($name)
         $memory = New-Object IO.MemoryStream
         $synth.SetOutputToAudioStream($memory, $format)
