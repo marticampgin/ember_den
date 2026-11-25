@@ -219,8 +219,31 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
     }[tab];
     return `<div class="lab-section-intro"><div><h2>${info[0]}</h2><p>${info[1]}</p></div>${button('refresh','Refresh','refresh')}</div>
     ${tab==='cases' ? `<div class="lab-actions">${button('suite','Run saved suite','play',true,!rows.length || suites[0]?.state==='running')}${button('starters','Add starter cases','bookmark')}</div>
-      ${suites.slice(0,5).map(s=>`<details class="lab-panel" ${s===suites[0]?'open':''}><summary>${escape(when(s.created_at))} · ${escape(s.state)}</summary><ul>${s.cases.map(c=>`<li>${c.experiment_id?`<button type="button" class="lab-btn" data-experiment="${escape(c.experiment_id)}">${escape(c.name)}</button>`:escape(c.name)} · ${escape(c.status||'Queued')} ${(c.checks||[]).map((v,i)=>' · '+(i?'B':'A')+' '+(v===true?'passed':v===false?'failed':'unscored')).join('')} ${escape(c.error||'')}</li>`).join('')}</ul></details>`).join('')}` : ''}
+      ${suites.slice(0,5).map(suiteResults).join('')}` : ''}
     ${!rows.length ? empty(info[4],info[2],info[3]) : `<div class="lab-list">${rows.map(item => `<button type="button" class="lab-row" data-item="${escape(item.id)}"><span><strong>${escape(item.name || item.prompt)}</strong><small>${escape([when(item.created_at),item.model,item.source].filter(Boolean).join(' · '))}</small></span>${item.status ? statusTag(item.status) : ''}${icon('arrow')}</button>`).join('')}</div>`}`;
+  }
+  function suiteResults(suite, index) {
+    const entries = suite.cases.map(item => {
+      const checks = (item.checks || []).map((outcome, arm) => {
+        const name = arm === 0 ? 'A' : 'B';
+        return name + ' ' + (outcome === true ? 'passed' : outcome === false ? 'failed' : 'unscored');
+      });
+      const unscored = item.status === 'completed' && checks.length && item.checks.every(value => value == null);
+      const detail = unscored ? 'Human review' : checks.join(' · ');
+      let badge = statusTag(item.status || 'pending');
+      if (item.status === 'completed' && checks.length) {
+        const failed = item.checks.includes(false);
+        const state = unscored ? 'pending' : failed ? 'failed' : 'completed';
+        const label = unscored ? 'Unscored' : failed ? 'Check failed' : 'Checks passed';
+        badge = '<span class="lab-status" data-state="' + state + '">' + label + '</span>';
+      }
+      const text = '<span><strong>' + escape(item.name) + '</strong><small>' + escape(item.error || detail || 'Queued') + '</small></span>';
+      if (!item.experiment_id) return '<div class="lab-row">' + text + badge + '</div>';
+      return '<button type="button" class="lab-row" data-experiment="' + escape(item.experiment_id) + '">' +
+        text + badge + icon('arrow') + '</button>';
+    });
+    return '<details class="lab-panel" ' + (index === 0 ? 'open' : '') + '><summary>' +
+      escape(when(suite.created_at)) + ' · ' + escape(suite.state) + '</summary><div class="lab-list">' + entries.join('') + '</div></details>';
   }
   function render() {
     if (!alive) return;
