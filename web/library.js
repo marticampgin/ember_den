@@ -6,9 +6,9 @@ class EmberLibrary extends HTMLElement {
       <link rel="stylesheet" href="./library.css">
       <section class="library-section" aria-labelledby="library-heading">
         <div class="library-heading"><div><h2 id="library-heading">Document library</h2>
-          <p>Import a text or Markdown file to use it in conversation.</p></div>
+          <p>Import text, Markdown, Word, or a text-based PDF to use in conversation.</p></div>
           <button type="button" class="button" data-import>${icon('plus', 16)}Import file</button>
-          <input type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" hidden>
+          <input type="file" accept=".txt,.md,.markdown,.docx,.pdf" hidden>
         </div>
         <p class="form-error" role="alert" hidden></p>
         <div data-entries></div>
@@ -22,6 +22,13 @@ class EmberLibrary extends HTMLElement {
       button.disabled = true;
       this.querySelector('.form-error').hidden = true;
       try {
+        if (/\.(pdf|docx)$/i.test(file.name)) {
+          if(file.size>5000000) throw new Error('Choose a PDF or Word file up to 5 MB.');
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          const parts=[];
+          for(let i=0;i<bytes.length;i+=16384) parts.push(String.fromCharCode(...bytes.subarray(i,i+16384)));
+          await api('/api/documents/import',{method:'POST',body:{name:file.name,data:btoa(parts.join(''))}});
+        } else {
         if (!/\.(txt|md|markdown)$/i.test(file.name) || file.size > 120000) {
           throw new Error('Choose a .txt or .md file up to 120 KB.');
         }
@@ -29,6 +36,7 @@ class EmberLibrary extends HTMLElement {
         try { text = new TextDecoder('utf-8', {fatal: true}).decode(await file.arrayBuffer()); }
         catch { throw new Error('Save the file as UTF-8 text and import it again.'); }
         await api('/api/documents', {method: 'POST', body: {name: file.name, text}});
+        }
         await this.refresh();
         notify('Document imported.');
       } catch (error) { this.showError(error); }

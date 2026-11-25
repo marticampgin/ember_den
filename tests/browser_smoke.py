@@ -72,7 +72,24 @@ def run(page, url, options):
     capture(page, options.screenshots, "companion-conversation")
     page.reload()
     expect(page.locator(".from-ember .message-body")).to_have_text("78")
+    page.get_by_role("button", name="Feedback", exact=True).click()
+    page.get_by_role("radio", name="Helpful", exact=True).check()
+    page.get_by_role("textbox", name="Feedback note").fill("Give numerical answers first.")
+    page.get_by_role("button", name="Save feedback").click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+    assert not page.request.get(url + "/api/memories").json()["memories"]
+    page.get_by_role("button", name="Feedback", exact=True).click()
+    expect(page.get_by_role("radio", name="Helpful", exact=True)).to_be_checked()
+    page.get_by_role("checkbox", name="Remember this preference").check()
+    capture(page, options.screenshots, "reply-feedback")
+    page.get_by_role("button", name="Save feedback").click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
     page.get_by_role("link", name="Memories", exact=True).click()
+    expect(page.locator(".memory-text")).to_have_text("Give numerical answers first.")
+    page.get_by_role("button", name="Edit memory").click()
+    page.get_by_role("textbox", name="What should Ember remember?").fill("Give the answer first.")
+    page.get_by_role("button", name="Save memory").click()
+    expect(page.locator(".memory-text")).to_have_text("Give the answer first.")
     page.locator("ember-library input[type=file]").set_input_files({
         "name": "field-notes.md", "mimeType": "text/markdown",
         "buffer": b"# River station\nThe kingfisher station callsign is Juniper-47.",

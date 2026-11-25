@@ -1,4 +1,5 @@
 const glyphs = {
+  tools: '<path d="M14 5a5 5 0 0 0-6 6l-5 5a2 2 0 0 0 3 3l5-5a5 5 0 0 0 6-6l-3 3-3-3z"/>',
   companion: '<path d="m3 4 6 3.5a12 12 0 0 1 6 0L21 4l-2 10-7 6-7-6z"/><path d="m6.5 13 3 2m8-2-3 2M11 17h2"/>',
   laboratory: '<path d="M9 3h6m-5 0v6l-6 9a2 2 0 0 0 1.7 3h12.6a2 2 0 0 0 1.7-3l-6-9V3M8 15h8"/>',
   memories: '<path d="M3 5.5c3-1.3 6.6-.8 9 1.2 2.4-2 6-2.5 9-1.2v13c-3-1.2-6.6-.8-9 1.2-2.4-2-6-2.4-9-1.2zM12 7v12"/>',
@@ -61,6 +62,16 @@ export function notify(message) {
 
 // Keep model output inert. Only a small set of text-formatting elements is created.
 function inlineText(node, text) {
+  const reference = text.trim();
+  if (/^https:\/\/en\.wikipedia\.org\/\?curid=\d+$/.test(reference) ||
+      /^https:\/\/api\.open-meteo\.com\/v1\/forecast\?[A-Za-z0-9%._=,&+-]+$/.test(reference)) {
+    const source = el('a', 'reference-link', text.trim());
+    source.href = text.trim();
+    source.target = '_blank';
+    source.rel = 'noopener noreferrer';
+    node.append(source);
+    return;
+  }
   const pattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*)/g;
   let cursor = 0;
   for (const match of text.matchAll(pattern)) {

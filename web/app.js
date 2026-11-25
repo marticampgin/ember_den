@@ -1,4 +1,6 @@
+import {feedbackButton} from './feedback.js';
 import './scene.js';
+import {VoiceControls, readButton} from './voice.js';
 import {api, el, icon, notify, openDialog, renderResponse} from './ui.js';
 import {mountMemories, mountSettings} from './preferences.js';
 
@@ -10,6 +12,7 @@ const navigation = [
   ['companion', 'Companion', 'message'],
   ['laboratory', 'Laboratory', 'laboratory'],
   ['memories', 'Memories', 'memories'],
+  ['tools', 'Tools', 'tools'],
   ['settings', 'Settings', 'settings'],
 ];
 const starters = [
@@ -24,7 +27,7 @@ let runtime = {online: false, models: [], settings: {}, checking: true};
 let routeVersion = 0;
 let historyVersion = 0;
 let statusVersion = 0;
-let pendingPoll;
+let pendingPoll, voice;
 const newChat = () => ({id: null, draft: '', messages: []});
 const chatPath = id => id ? '#chat/' + encodeURIComponent(id) : '#companion';
 
@@ -181,6 +184,8 @@ async function refreshStatus() {
 async function renderRoute() {
   const version = ++routeVersion;
   clearTimeout(pendingPoll);
+  voice?.dispose();
+  voice = null;
   if (labCleanup) { labCleanup(); labCleanup = null; }
   activeChat = null;
   const [slug = '', id, subId] = location.hash.slice(1).split('/');
@@ -200,7 +205,15 @@ async function renderRoute() {
       if (version === routeVersion) labCleanup = cleanup;
       else cleanup?.();
     } else if (route === 'memories') await mountMemories(page);
-    else if (route === 'settings') await mountSettings(page, refreshStatus);
+    else if (route === 'settings') {
+      await mountSettings(page, refreshStatus);
+    } else if (route === 'tools') {
+      const {mountTools} = await import('./tools.js');
+      if (!page.isConnected) return;
+      const cleanup = await mountTools(page, {api, notify});
+      if (version === routeVersion) labCleanup = cleanup;
+      else cleanup?.();
+    }
     else {
       const key = slug === 'chat' && id ? decodeURIComponent(id) : 'new';
       let chat = cache.get(key);
@@ -252,12 +265,16 @@ function renderCompanion(page) {
     <div class="composer-area">
       <form class="composer" id="composer">
         <textarea id="prompt" rows="1" maxlength="12000" aria-label="Message Ember" placeholder="Message Ember…" spellcheck="true"></textarea>
+        <a class="composer-tool" href="#tools" aria-label="Open tools" title="Open tools">${icon('tools', 17)}</a>
+        <button type="button" class="icon-button voice-mic" aria-label="Dictate a message" title="Dictate a message" data-voice-mic aria-pressed="false"></button>
         <button type="submit" class="send-button" id="send"></button>
       </form>
+      <div class="voice-feedback"><span role="status" data-voice-status></span><button type="button" data-voice-stop hidden>Stop voice</button></div>
       <div class="starter-list" aria-label="Conversation starters"></div>
     </div>`;
   const input = page.querySelector('#prompt');
   input.value = activeChat.draft;
+  voice = new VoiceControls(page, input, updateCompanionControls);
   input.oninput = () => {
     activeChat.draft = input.value;
     sizeInput(input);
@@ -331,6 +348,15 @@ function renderTranscript(chat) {
       inspect.textContent = 'Inspect run';
       inspect.insertAdjacentHTML('beforeend', icon('arrow', 13));
       footer.append(inspect);
+      if (message.role === 'assistant') footer.append(feedbackButton(message.run_id));
+    }
+    if (message.role === 'assistant' && message.content) {
+      if (message.content.includes('Review in Tools')) {
+        const review = el('a', 'trace-link', 'Review in Tools');
+        review.href = '#tools';
+        footer.append(review);
+      }
+      footer.append(readButton(message.content, () => voice));
     }
     if (footer.childElementCount) body.after(footer);
   }
@@ -340,7 +366,8 @@ function updateCompanionControls() {
   if (!activeChat) return;
   const mine = activeJob?.chat === activeChat;
   const lastStatus = activeChat.messages.at(-1)?.status;
-  const state = mine ? activeJob.state : lastStatus === 'running' ? 'thinking' : activeChat.draft.trim() ? 'listening' : lastStatus === 'error' ? 'error' : 'idle';
+  const voiceState = {recording:'listening', transcribing:'thinking', synthesizing:'thinking', speaking:'responding'}[voice?.mode];
+  const state = mine ? activeJob.state : voiceState || (lastStatus === 'running' ? 'thinking' : activeChat.draft.trim() ? 'listening' : lastStatus === 'error' ? 'error' : 'idle');
   const scene = main.querySelector('ember-scene');
   if (!scene) return;
   if (scene.getAttribute('state') !== state) scene.setAttribute('state', state);
@@ -359,7 +386,8 @@ function updateCompanionControls() {
   send.innerHTML = mine ? icon('stop', 15) + (activeJob.stopping ? 'Stopping…' : 'Stop') : icon('send', 21);
   send.title = mine ? 'Stop response' : 'Send message';
   send.setAttribute('aria-label', send.title);
-  send.disabled = mine ? Boolean(activeJob.stopping) : Boolean(activeJob) || lastStatus === 'running' || !activeChat.draft.trim();
+  const recording = ['opening', 'recording', 'transcribing'].includes(voice?.mode);
+  send.disabled = mine ? Boolean(activeJob.stopping) : recording || Boolean(activeJob) || lastStatus === 'running' || !activeChat.draft.trim();
   main.querySelector('.view-companion').classList.toggle('has-messages', activeChat.messages.length > 0);
   main.querySelector('#transcript').setAttribute('aria-busy', String(mine));
   main.querySelector('.starter-list').hidden = activeChat.messages.length > 0;
@@ -403,6 +431,8 @@ async function consumeStream(response, handle) {
 
 async function sendMessage(chat, prompt) {
   const job = {chat, controller: new AbortController(), state: 'thinking'};
+  const spokenTurn = voice?.sending();
+  const replyVoice = voice;
   activeJob = job;
   chat.draft = '';
   const input = main.querySelector('#prompt');
@@ -458,7 +488,10 @@ async function sendMessage(chat, prompt) {
   } finally {
     activeJob = null;
     if (assistant) Object.assign(assistant, {status: user.status, error: user.error});
-    if (activeChat === chat) renderTranscript(chat);
+    if (activeChat === chat) {
+      renderTranscript(chat);
+      if (completed && spokenTurn && voice === replyVoice && voice.serial === spokenTurn.serial) voice.speak(assistant?.content, spokenTurn);
+    }
     updateCompanionControls();
     refreshHistory();
   }

@@ -1,5 +1,8 @@
 import {api, el, icon, notify, openDialog} from './ui.js';
 import './library.js';
+import {advancedConfig, profileDialog} from './configuration.js';
+import {mountAppearance} from './appearance.js';
+import {mountVoiceSettings} from './voice.js';
 
 function formError(root, error) {
   const node = root.querySelector('.form-error');
@@ -121,12 +124,13 @@ export async function mountSettings(root, refreshStatus) {
         <div class="field-row"><div><label for="temperature">Temperature</label><p>Lower values favor more consistent replies.</p></div><div class="range-field"><input type="range" id="temperature" name="temperature" min="0" max="2" step="0.05"><output for="temperature"></output></div></div>
         <div class="field-row"><div><label for="context-length">Context window</label><p>Maximum number of tokens per request.</p></div><input type="number" name="context_length" id="context-length" min="1024" max="16384" step="1" required></div>
       </section>
+      <section><h2>Routing and retrieval</h2><div class="config-fields">${advancedConfig(settings, status)}</div></section>
       <section><h2>Companion</h2>
         <div class="field-row"><div><label for="use-memory">Use saved memories</label><p>Include relevant details when assembling a reply.</p></div><input type="checkbox" role="switch" class="switch" name="memory_enabled" id="use-memory"></div>
         <div class="prompt-field"><label for="system-prompt">System prompt</label><p>The instructions that shape Ember’s voice and behavior.</p><textarea id="system-prompt" rows="4" name="system_prompt" maxlength="4000" required></textarea></div>
       </section>
       <p class="form-error" role="alert" hidden></p>
-      <div class="form-actions"><button type="submit" class="button primary">Save settings</button></div>
+      <div class="form-actions"><button type="button" class="button" data-profiles>Profiles</button><button type="submit" class="button primary">Save settings</button></div>
     </form>`;
   const form = pane.querySelector('form');
   const controls = form.elements;
@@ -146,9 +150,7 @@ export async function mountSettings(root, refreshStatus) {
   const updateTemp = () => { output.value = Number(controls.temperature.value).toFixed(2); };
   controls.temperature.addEventListener('input', updateTemp);
   updateTemp();
-  form.onsubmit = async event => {
-    event.preventDefault();
-    const button = form.querySelector('[type="submit"]');
+  const readConfig = () => {
     const body = {
       temperature: Number(controls.temperature.value),
       context_length: Number(controls.context_length.value),
@@ -156,6 +158,20 @@ export async function mountSettings(root, refreshStatus) {
       system_prompt: controls.system_prompt.value.trim(),
     };
     if (controls.model.value) body.model = controls.model.value;
+    for (const select of form.querySelectorAll('[data-setting]')) body[select.dataset.setting]=select.value;
+    return {...settings,...body};
+  };
+  form.querySelector('[data-profiles]').onclick = () => profileDialog(readConfig(), async config=>{
+    await api('/api/settings',{method:'PATCH',body:config});
+    await mountSettings(root, refreshStatus);
+    notify('Profile restored.');
+  });
+  mountAppearance(pane);
+  if(root.isConnected) mountVoiceSettings(root);
+  form.onsubmit = async event => {
+    event.preventDefault();
+    const button = form.querySelector('[type="submit"]');
+    const body = readConfig();
     button.disabled = true;
     form.querySelector('.form-error').hidden = true;
     try {

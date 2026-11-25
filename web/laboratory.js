@@ -1,3 +1,4 @@
+import {advancedConfig, profileDialog} from './configuration.js';
 const stylesheet = document.createElement('link');
 stylesheet.rel = 'stylesheet';
 stylesheet.href = new URL('./laboratory.css', import.meta.url).href;
@@ -36,6 +37,9 @@ function metrics(values = {}) {
     pairs.push(['Resident VRAM', `${(values.resident_vram_bytes / 2 ** 30).toFixed(2)} GiB`], ['Load time',duration(values.load_ms)]);
   }
   const more = [['Input tokens', number(values.input_tokens)],['Runtime context window',number(values.effective_context_length)]];
+  if(Number.isFinite(values.input_tokens) && values.effective_context_length>0){
+    more.push(['Input share of context',number(100*values.input_tokens/values.effective_context_length)+'%']);
+  }
   return `<dl class="lab-metrics">${pairs.map(([key,value]) => `<div><dt>${key}</dt><dd>${value}</dd></div>`).join('')}</dl>
     ${Number.isFinite(values.output_tokens) ? `<details><summary>Measurement details</summary><p class="lab-note">Ollama reports generation speed and token counts, including internal generation. Resident VRAM is sampled after the response.</p><dl class="lab-extra-metrics">${more.map(([k,v])=>`<div><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl></details>` : ''}`;
 }
@@ -47,6 +51,18 @@ function capturedReferences(refs = []) {
   if (!refs.length) return '<p class="lab-note">No references retrieved.</p>';
   return `<ul class="lab-references">${refs.map(item => {
     const lines = item.line_start == null ? '' : ` · lines ${item.line_start}–${item.line_end ?? item.line_start}`;
+    if(item.kind==='episode'){
+      return `<li><strong>${item.conversation_id?`<a href="#chat/${encodeURIComponent(item.conversation_id)}">Earlier conversation</a>`:'Earlier conversation'}</strong><p>${escape(item.text)}</p></li>`;
+    }
+    if (item.kind==='web') {
+      const title = escape(item.name || 'Public source');
+      const sourceUrl = item.url || '';
+      const allowed = /^https:\/\/en\.wikipedia\.org\/\?curid=\d+$/.test(sourceUrl)
+        || /^https:\/\/api\.open-meteo\.com\/v1\/forecast\?[A-Za-z0-9_.,%=&-]+$/.test(sourceUrl);
+      const linked = allowed
+        ? `<a href="${escape(item.url)}" target="_blank" rel="noopener noreferrer">${title} ↗</a>` : title;
+      return `<li><strong>${linked}</strong><p>${escape(item.text)}</p></li>`;
+    }
     const name = item.kind==='document' ? (item.name || 'Document') + lines : 'Saved memory';
     return `<li><strong>${escape(name)}</strong><p>${escape(item.text)}</p></li>`;
   }).join('')}</ul>`;
@@ -64,6 +80,8 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
   let draft;
   let record;
   let selectedCase = '';
+  let suites = [], inventoryStatus = {};
+  let overview = {};
   let rows = [];
   let loading = true;
   let submitting = false;
@@ -73,10 +91,13 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
   const tabs = [
     ['workbench','Workbench','sliders'], ['traces','Run traces','trace'],
     ['history','History','history'], ['cases','Test cases','bookmark'],
+    ['models','Models','sliders'],
+    ['overview','Performance','trace'],
   ];
 
   function initialDraft() {
     const a = {
+      ...settings,
       model: installed.some(m => m.name === settings.model) ? settings.model : installed[0]?.name || '',
       temperature: settings.temperature ?? 0.7, context_length: settings.context_length ?? 4096,
       seed: settings.seed ?? 42, system_prompt: settings.system_prompt ?? '',
@@ -97,7 +118,7 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
       <label>Model<select required name="model${index}" data-config="${index}" data-key="model" ${installed.length ? '' : 'disabled'}>${missing ? `<option selected value="${escape(cfg.model)}">${escape(cfg.model)} (unavailable)</option>` : ''}${opts || '<option value="">No installed models</option>'}</select></label>
       <p class="lab-model-spec" data-spec="${index}">${escape([selected?.family, selected?.parameters, selected?.quantization].filter(Boolean).join(' · '))}</p>
       <div class="lab-fields">${scalar('temperature','Temperature',0,2,0.01)}${scalar('context_length','Context window',1024,16384,1)}</div>
-      <details class="lab-advanced"><summary>Advanced settings</summary><div>${scalar('seed','Random seed',0,2147483647,1,true)}<label>System prompt<textarea rows="3" maxlength="4000" data-config="${index}" data-key="system_prompt">${escape(cfg.system_prompt)}</textarea></label></div></details>
+      <details class="lab-advanced"><summary>Advanced settings</summary><div>${scalar('seed','Random seed',0,2147483647,1,true)}<label>System prompt<textarea rows="3" maxlength="4000" data-config="${index}" data-key="system_prompt">${escape(cfg.system_prompt)}</textarea></label>${advancedConfig(cfg,inventoryStatus,index)}${button('profile-'+index,'Configuration profiles')}</div></details>
     </section>`;
   }
   function form() {
@@ -108,7 +129,9 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
       ${pinned ? `<div class="lab-toolbar"><p class="lab-note">Captured input · ${number(draft.history.length)} prior message${draft.history.length===1?'':'s'} · ${number(draft.context.length)} reference${draft.context.length===1?'':'s'}</p>${button('clear-context','Remove captured context')}</div>` : ''}
       ${draft.source_redacted || draft.redacted ? '<p class="lab-note">The saved input masks recognized credentials. Replay uses the masked text.</p>' : ''}
       <div class="lab-cols">${formCard(0)}${formCard(1)}</div>
+      <label><input type="checkbox" name="live_retrieval" ${draft.live_retrieval?'checked':''}> Retrieve current library sources separately for each configuration</label>
       <details class="lab-check" ${draft.expected ? 'open' : ''}><summary>Expected text check <span>Optional</span></summary><label>Response must contain<input name="expected" maxlength="2000" value="${escape(draft.expected)}" placeholder="A word or phrase to check in each answer"></label><p class="lab-note">Ignores capitalization. A match checks only the phrase you enter.</p></details>
+      <label>Evaluation method<select name="check_mode">${[['contains','Contains expected phrase'],['exact','Exact expected answer'],['json','Valid JSON object or array'],['source','Retrieved expected filename']].map(([v,t])=>`<option value="${v}" ${(draft.check_mode||'contains')===v?'selected':''}>${t}</option>`).join('')}</select></label>
       <div class="lab-actions">${button('save-case','Save test case','bookmark',false,!installed.length)}<button class="lab-btn lab-primary" type="submit" ${!online || !installed.length || submitting ? 'disabled' : ''}>${icon('play')}${submitting ? 'Starting…' : 'Run comparison'}</button></div>
     </form>`;
   }
@@ -121,7 +144,7 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
       <b class="lab-model-name">${escape(cfg.model)}</b><p class="lab-note">Temperature ${escape(cfg.temperature)} · Context ${number(cfg.context_length)}</p>
       ${run ? metrics(run.metrics) : ''}${item.error ? `<p class="lab-error" role="status">${escape(item.error)}</p>` : ''}
       ${run?.response ? `<div class="lab-response">${escape(run.response)}</div>` : !run && !item.error ? `<p class="lab-note">${message}</p>` : ''}
-      ${typeof item.check === 'boolean' ? `<p class="lab-verdict" data-pass="${item.check}">Expected text ${item.check ? 'matched' : 'missing'}</p>` : ''}
+      ${typeof item.check === 'boolean' ? `<p class="lab-verdict" data-pass="${item.check}">${escape(({contains:'Expected text',exact:'Exact answer',json:'JSON format',source:'Retrieved filename'})[record.snapshot.check_mode||'contains'])} ${item.check ? 'matched' : 'missing'}</p>` : ''}
       ${run ? `<details><summary>Execution trace</summary>${traceEvents(run.events)}${run.context?.length ? capturedReferences(run.context) : ''}</details>` : ''}
       <details><summary>Recorded configuration</summary><pre>${escape(JSON.stringify({model:model.name || cfg.model,digest:model.digest || null,...cfg},null,2))}</pre></details></section>`;
   }
@@ -132,6 +155,12 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
       ${record.snapshot.redacted || record.snapshot.source_redacted ? '<small>Recognized credentials were redacted in the saved input.</small>' : ''}
       ${record.snapshot.changed_models?.length ? `<small>Model revision changed since the original comparison for ${escape(record.snapshot.changed_models.join(', '))}.</small>` : ''}</section>
       <div class="lab-cols">${record.results.map(resultCard).join('')}</div>
+      ${(record.snapshot.changed_roles||[]).map(r=>`<p class="lab-note">Configuration ${escape(r.arm)} · ${escape(r.role)} · ${escape(r.model)} · ${r.available?'model revision changed':'model unavailable'}</p>`).join('')}
+      ${record.status==='completed' ? `<details class="lab-panel" ${record.judgment?'open':''}><summary>Local model assessment</summary>
+        <p class="lab-note">Reviews the first 2,200 characters of each answer for accuracy and relevance.</p>
+        <label>Review model<select name="judge">${(installed.length?installed:record.snapshot.models).map(m=>`<option ${m.name===record.snapshot.configs[0].model?'selected':''}>${escape(m.name)}</option>`).join('')}</select></label>
+        ${button('judge','Review answers')}${record.judgment?`<p>${escape(record.judgment.model)} · ${escape(record.judgment.assessment)}</p>`:''}</details>` : ''}
+      ${record.status!=='running'?`<div class="lab-panel"><h3>Your evaluation</h3><p class="lab-note">${record.preference?'Recorded preference · '+escape(record.preference):'Which response better met the request?'}</p><div class="lab-actions">${['A','B','Tie'].map(v=>button('vote-'+v,v==='Tie'?'Tie':'Prefer '+v)).join('')}</div></div>`:''}
       <div class="lab-actions">${button('edit-comparison','Edit configurations','sliders')}${button('replay','Replay comparison','play',true,record.status==='running' || submitting)}</div>`;
   }
   function traceDetail() {
@@ -139,16 +168,30 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
       ${metrics(record.metrics)}${record.error ? `<p class="lab-error">${escape(record.error)}</p>` : ''}
       <section class="lab-panel"><h3>Recorded events</h3>${traceEvents(record.events)}<details><summary>Response</summary><div class="lab-response">${escape(record.response || 'No response recorded.')}</div></details>
       <details><summary>Retrieved references (${record.context?.length || 0})</summary>${capturedReferences(record.context)}</details>
-      <details><summary>Configuration and conversation history</summary><pre>${escape(JSON.stringify({configuration:record.config,history:record.history || []},null,2))}</pre></details></section>
+      <details><summary>Configuration and conversation history</summary><pre>${escape(JSON.stringify({configuration:record.config,history:record.history || [],retrieval:record.retrieval,model_passes:record.workflow_passes},null,2))}</pre></details></section>
       <div class="lab-actions">${button('use-trace','Use in comparison','sliders',true)}</div>`;
   }
   function listings() {
+    if(tab==='overview'){
+      const ram=overview.system_memory;
+      return `<div class="lab-section-intro"><div><h2>Runtime performance</h2><p>Newest ${number(overview.runs)} runs, up to 200. Timings use completed runs.</p></div>${button('refresh','Refresh','refresh')}</div>
+        ${ram?`<p class="lab-note">${(ram.available/2**30).toFixed(1)} GiB system RAM available of ${(ram.total/2**30).toFixed(1)} GiB at refresh.</p>`:''}
+        ${Object.entries(overview.models||{}).map(([name,v])=>`<section class="lab-panel"><h3>${escape(name)}</h3><p>${v.completed} completed · ${v.errors} errors · ${v.count} total</p><p class="lab-note">Median first token ${duration(v.median_first_ms)} · Median end to end ${duration(v.median_ms)}</p></section>`).join('')}
+        ${overview.tools?.length?`<section class="lab-panel"><h3>Tool activity</h3>${overview.tools.map(t=>`<p>${escape(t.tool)} · ${escape(t.status)} · ${number(t.count)}</p>`).join('')}</section>`:''}`;
+    }
+    if(tab==='models'){
+      const groups=[['Chat models',installed],['Embedding models',inventoryStatus.embedding_models||[]]];
+      return `<div class="lab-section-intro"><div><h2>Model inventory</h2><p>Models available through the local inference provider.</p></div>${button('refresh','Refresh','refresh')}</div>`+
+        groups.map(([title,items])=>`<section class="lab-panel"><h3>${title}</h3>${!items.length?'<p class="lab-note">No models available.</p>':items.map(m=>`<details><summary>${escape(m.name)}</summary><p>${escape([m.family,m.parameters,m.quantization,Number.isFinite(m.size)?(m.size/2**30).toFixed(2)+' GiB on disk':''].filter(Boolean).join(' · '))}</p><pre>${escape(m.digest||'Digest unavailable')}</pre></details>`).join('')}</section>`).join('');
+    }
     const info = {
       history:['Comparison history','Saved runs keep both answers, their settings, and their measurements.','No comparisons yet','Run a comparison in the workbench to see it here.','history'],
       traces:['Run traces','Inspect the model, inputs, and recorded stages behind a response.','No runs yet','Send Ember a message or run a comparison to create a trace.','trace'],
       cases:['Saved test cases','Reusable prompts, settings, and expected text for regression checks.','No test cases yet','Save a test case from the workbench to run it again later.','bookmark'],
     }[tab];
     return `<div class="lab-section-intro"><div><h2>${info[0]}</h2><p>${info[1]}</p></div>${button('refresh','Refresh','refresh')}</div>
+    ${tab==='cases' ? `<div class="lab-actions">${button('suite','Run saved suite','play',true,!rows.length || suites[0]?.state==='running')}</div>
+      ${suites.slice(0,5).map(s=>`<details class="lab-panel" ${s===suites[0]?'open':''}><summary>${escape(when(s.created_at))} · ${escape(s.state)}</summary><ul>${s.cases.map(c=>`<li>${c.experiment_id?`<button type="button" class="lab-btn" data-experiment="${escape(c.experiment_id)}">${escape(c.name)}</button>`:escape(c.name)} · ${escape(c.status||'Queued')} ${(c.checks||[]).map((v,i)=>' · '+(i?'B':'A')+' '+(v===true?'passed':v===false?'failed':'unscored')).join('')} ${escape(c.error||'')}</li>`).join('')}</ul></details>`).join('')}` : ''}
     ${!rows.length ? empty(info[4],info[2],info[3]) : `<div class="lab-list">${rows.map(item => `<button type="button" class="lab-row" data-item="${escape(item.id)}"><span><strong>${escape(item.name || item.prompt)}</strong><small>${escape([when(item.created_at),item.model,item.source].filter(Boolean).join(' · '))}</small></span>${item.status ? statusTag(item.status) : ''}${icon('arrow')}</button>`).join('')}</div>`}`;
   }
   function render() {
@@ -163,10 +206,14 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
     const current = ++request;
     tab = nextTab; view = nextTab==='workbench' ? 'form' : 'list'; loading = true; error = ''; rows = []; render();
     try {
-      if (tab==='workbench') {
+      if(tab==='overview'){
+        const data=await get('/api/lab/overview');
+        if(!alive || current!==request)return;
+        overview=data;
+      } else if (tab==='workbench' || tab==='models') {
         const status = await get('/api/status');
         if (!alive || current !== request) return;
-        installed = status.models || []; online = !!status.online; settings = status.settings || {};
+        inventoryStatus=status; installed = status.models || []; online = !!status.online; settings = status.settings || {};
         if (!draft || (!draft.configs[0].model && installed.length)) {
           const defaults = initialDraft();
           draft = draft ? {...draft, configs:defaults.configs} : defaults;
@@ -176,6 +223,12 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
         const data = await get(path);
         if (!alive || current !== request) return;
         rows = data[field] || [];
+        if(tab==='cases'){
+          const response=await get('/api/lab/suites');
+          if (!alive || current !== request) return;
+          suites=response.suites;
+          if(suites[0]?.state==='running') timer=setTimeout(()=>load('cases'),2000);
+        }
       }
     } catch (err) {
       if (current !== request || !alive) return;
@@ -219,7 +272,8 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
         const model=installed.find(m=>m.name===input.value);
         root.querySelector(`[data-spec="${idx}"]`).textContent=[model?.family,model?.parameters,model?.quantization].filter(Boolean).join(' · ');
       }
-    } else if (input.name==='prompt' || input.name==='expected') draft[input.name]=input.value;
+    } else if (input.name==='live_retrieval') draft.live_retrieval=input.checked;
+    else if (['prompt','expected','check_mode'].includes(input.name)) draft[input.name]=input.value;
   }
   async function runComparison(replay=false) {
     if (submitting) return;
@@ -257,9 +311,34 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
   async function click(event) {
     const el=event.target.closest('button');
     if (!el || el.disabled) return;
+    if(el.dataset.experiment){tab='history';await openRecord(el.dataset.experiment,'result');return;}
+    if(el.dataset.action?.startsWith('profile-')){
+      const i=Number(el.dataset.action.slice(-1));
+      profileDialog(draft.configs[i], config=>{draft.configs[i]={...config};render();});
+      return;
+    }
+    if(el.dataset.action?.startsWith('vote-')){
+      try {await get('/api/lab/reviews/'+record.id,{method:'POST',body:{preference:el.dataset.action.slice(5)}});
+        record.preference=el.dataset.action.slice(5);render();}
+      catch(e){error=e.message;render();}
+      return;
+    }
     if (el.dataset.tab) {await load(el.dataset.tab);return;}
     if (el.dataset.item) {await openRecord(el.dataset.item,tab==='traces'?'trace':tab==='cases'?'case':'result');return;}
     switch (el.dataset.action) {
+      case 'judge': {
+        const id=record.id;
+        el.disabled=true;el.textContent='Reviewing…';
+        try {await get('/api/lab/judgments/'+id,{method:'POST',body:{model:root.querySelector('[name=judge]').value}});
+          if(alive && view==='result' && record.id===id){view='loading';await openRecord(id,'result');}}
+        catch(e){if(alive){error=e.message;render();}}
+        break;
+      }
+      case 'suite':
+        el.disabled=true;
+        try {await get('/api/lab/suites',{method:'POST',body:{}});await load('cases');}
+        catch(e){error=e.message;render();}
+        break;
       case 'refresh': case 'back': await load();break;
       case 'clear-context': draft.context=[]; draft.history=[]; draft.source_run_id=null; render();break;
       case 'replay': await runComparison(true);break;
@@ -271,7 +350,7 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
         draft.prompt=captured.prompt; draft.source_run_id=captured.id;
         draft.source_redacted=!!captured.redacted;
         draft.context=captured.context || []; draft.history=captured.history || [];
-        const selectedModel = captured.route==='calculator' ? draft.configs[0].model : captured.model;
+        const selectedModel = captured.route==='chat' ? (captured.config?.model || captured.model) : draft.configs[0].model;
         draft.configs[0]={...draft.configs[0],...captured.config,model:selectedModel,seed:captured.config?.seed ?? null};
         render();break;
       }

@@ -10,6 +10,7 @@
   container-type: size;
 }
 .world {
+  filter: var(--forest-light);
   position: absolute;
   inset: 0;
   overflow: hidden;
@@ -26,6 +27,7 @@
   aspect-ratio: 135 / 150;
 }
 .actor canvas {
+  filter: var(--fox-coat);
   display: block;
   width: 100%;
   height: 100%;
