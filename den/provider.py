@@ -33,6 +33,52 @@ def local_chat_model(name, metadata):
     return not re.search(r"embed|(?:^|[-_: /])cloud(?:$|[-_: /])", identifiers)
 
 
+def runtime_error(message, status):
+    if not isinstance(message, str):
+        return f"Ollama returned HTTP {status}."
+    cause = message.casefold()
+    if "out of memory" in cause or "requires more system memory" in cause:
+        return "Ollama ran out of memory. Choose a smaller model or reduce the context length in Settings."
+    if "cuda error" in cause and ("initialization" in cause or "terminated" in cause):
+        return "Ollama's GPU runner failed to initialize this model. Try a smaller model in Settings or restart Ollama."
+    return message[:600]
+
+
+class VisibleContent:
+    """Some GGUF templates put <think> blocks in content, even in non-thinking mode."""
+
+    def __init__(self):
+        self.pending = ""
+        self.depth = 0
+
+    def feed(self, text, final=False):
+        data = self.pending + text
+        self.pending = ""
+        visible = []
+        while data:
+            head, marker, tail = data.partition("<")
+            if not self.depth:
+                visible.append(head)
+            if not marker:
+                break
+            candidate = "<" + tail
+            folded = candidate[:8].lower()
+            if folded.startswith("<think>"):
+                self.depth += 1
+                data = tail[6:]
+            elif folded == "</think>":
+                self.depth = max(0, self.depth - 1)
+                data = tail[7:]
+            elif not final and ("<think>".startswith(folded) or "</think>".startswith(folded)):
+                self.pending = candidate
+                break
+            else:
+                if not self.depth:
+                    visible.append("<")
+                data = tail
+        return "".join(visible)
+
+
 class Ollama:
     name = "Ollama"
 
@@ -63,7 +109,7 @@ class Ollama:
                             message = json.loads(detail).get("error")
                         except (ValueError, AttributeError):
                             message = None
-                        raise ProviderError(message or f"Ollama returned HTTP {response.status}.")
+                        raise ProviderError(runtime_error(message, response.status))
                     yield response
         except TimeoutError as exc:
             raise ProviderError("Ollama timed out while preparing the response. Try a smaller model.") from exc
@@ -91,6 +137,17 @@ class Ollama:
                 })
             return result
 
+    def footprint(self, model):
+        # Sample only this model's reported residency; this endpoint does not measure peak VRAM.
+        try:
+            with self.request("/api/ps", timeout=1) as response:
+                loaded = json.load(response)["models"]
+                item = next((r for r in loaded if r.get("name") == model or r.get("model") == model), {})
+                return {"resident_vram_bytes": item.get("size_vram"), "resident_model_bytes": item.get("size"),
+                        "effective_context_length": item.get("context_length")}
+        except ProviderError:
+            return {}
+
     def stream(self, messages, config, cancellation=None):
         model = config["model"]
         with self.request("/api/show", {"model": model}, cancellation=cancellation) as response:
@@ -108,6 +165,7 @@ class Ollama:
         # Suppress separate thinking output on models advertising this capability.
         if "thinking" in capabilities:
             payload["think"] = False
+        visible = VisibleContent()
         with self.request("/api/chat", payload, timeout=180, cancellation=cancellation) as response:
             for line in response:
                 if cancellation:
@@ -116,8 +174,9 @@ class Ollama:
                     continue
                 packet = json.loads(line)
                 if packet.get("error"):
-                    raise ProviderError(str(packet["error"]))
-                token = (packet.get("message") or {}).get("content")
+                    raise ProviderError(runtime_error(packet["error"], 500))
+                raw_text = (packet.get("message") or {}).get("content") or ""
+                token = visible.feed(raw_text, final=packet.get("done", False))
                 if token:
                     yield {"text": token}
                 if packet.get("done"):
@@ -125,6 +184,7 @@ class Ollama:
                     count = packet.get("eval_count")
                     load = packet.get("load_duration")
                     yield {"metrics": {
+                        **self.footprint(model),
                         "input_tokens": packet.get("prompt_eval_count"), "output_tokens": count,
                         "tokens_per_second": round(count * 1e9 / elapsed, 2)
                         if count is not None and elapsed else None,
