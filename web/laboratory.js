@@ -1,4 +1,5 @@
 import {advancedConfig, profileDialog} from './configuration.js';
+import {renderResponse} from './ui.js';
 const stylesheet = document.createElement('link');
 stylesheet.rel = 'stylesheet';
 stylesheet.href = new URL('./laboratory.css', import.meta.url).href;
@@ -168,7 +169,7 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
     return `<section class="lab-config lab-result"><header><span class="lab-letter">${item.label}</span><h3>Configuration ${item.label}</h3>${statusTag(item.status)}</header>
       <b class="lab-model-name">${escape(run?.model || cfg.model)}</b><p class="lab-note">${run?.tool_execution?.tool ? escape(run.tool_execution.tool+' · '+run.tool_execution.execution) : 'Temperature '+escape(cfg.temperature)+' · Context '+number(cfg.context_length)} · Tools: ${escape(selection)}</p>
       ${run ? metrics(run.metrics) : ''}${item.error ? `<p class="lab-error" role="status">${escape(item.error)}</p>` : ''}
-      ${run?.response ? `<div class="lab-response">${escape(run.response)}</div>` : !run && !item.error ? `<p class="lab-note">${message}</p>` : ''}
+      ${run?.response ? `<div class="lab-response message-body" data-answer="${index}"></div>` : !run && !item.error ? `<p class="lab-note">${message}</p>` : ''}
       ${typeof item.check === 'boolean' ? `<p class="lab-verdict" data-pass="${item.check}">${escape(({contains:'Expected text',exact:'Exact answer',json:'JSON format',source:'Retrieved filename'})[record.snapshot.check_mode||'contains'])} ${item.check ? 'matched' : 'missing'}</p>` : ''}
       ${run ? `<details><summary>Execution trace</summary>${traceEvents(run.events)}${run.context?.length ? capturedReferences(run.context) : ''}${toolDetails(run)}</details>` : ''}
       <details><summary>Recorded configuration</summary><pre>${escape(JSON.stringify({model:model.name || cfg.model,digest:model.digest || null,...cfg},null,2))}</pre></details></section>`;
@@ -208,7 +209,7 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
     if(tab==='models'){
       const groups=[['Chat models',installed],['Embedding models',inventoryStatus.embedding_models||[]]];
       return `<div class="lab-section-intro"><div><h2>Model inventory</h2><p>Models available through the local inference provider.</p></div>${button('refresh','Refresh','refresh')}</div>`+
-        groups.map(([title,items])=>`<section class="lab-panel"><h3>${title}</h3>${!items.length?'<p class="lab-note">No models available.</p>':items.map(m=>`<details><summary>${escape(m.name)}</summary><p>${escape([m.family,m.parameters,m.quantization,Number.isFinite(m.size)?(m.size/2**30).toFixed(2)+' GiB on disk':''].filter(Boolean).join(' · '))}</p><pre>${escape(m.digest||'Digest unavailable')}</pre></details>`).join('')}</section>`).join('');
+        groups.map(([title,items])=>`<section class="lab-panel"><h3>${title}</h3>${!items.length?'<p class="lab-note">No models available.</p>':items.map(m=>`<details><summary>${escape(m.name)}</summary><p>${escape([m.provider || inventoryStatus.provider,m.family,m.parameters,m.quantization,Number.isFinite(m.size)?(m.size/2**30).toFixed(2)+' GiB on disk':''].filter(Boolean).join(' · '))}</p><pre>${escape(m.digest||'Digest unavailable')}</pre></details>`).join('')}</section>`).join('');
     }
     const info = {
       history:['Comparison history','Saved runs keep both answers, their settings, and their measurements.','No comparisons yet','Run a comparison in the workbench to see it here.','history'],
@@ -226,6 +227,9 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
     root.innerHTML = `<div class="lab">${title}<nav class="lab-tabs" aria-label="Laboratory views">${tabs.map(([id,title,glyph])=>`<button type="button" data-tab="${id}" aria-current="${tab===id ? 'page' : 'false'}">${icon(glyph)}${title}</button>`).join('')}</nav>
       ${error ? `<div class="lab-error lab-banner" role="alert">${icon('info')}<span>${escape(error)}</span></div>` : ''}
       <div class="lab-body">${loading ? '<p class="lab-note" role="status">Loading laboratory…</p>' : view==='result' ? result() : view==='trace' ? traceDetail() : tab==='workbench' ? form() : listings()}</div></div>`;
+    for (const answer of root.querySelectorAll('[data-answer]')) {
+      renderResponse(answer, record.results[Number(answer.dataset.answer)].run.response);
+    }
   }
   async function load(nextTab = tab) {
     closeStrategy?.(); closeStrategy=null;
