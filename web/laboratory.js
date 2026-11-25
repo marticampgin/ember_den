@@ -37,11 +37,14 @@ function metrics(values = {}) {
     pairs.push(['Resident VRAM', `${(values.resident_vram_bytes / 2 ** 30).toFixed(2)} GiB`], ['Load time',duration(values.load_ms)]);
   }
   const more = [['Input tokens', number(values.input_tokens)],['Runtime context window',number(values.effective_context_length)]];
+  if (Number.isFinite(values.pipeline_output_tokens)) {
+    more.push(['All passes · input tokens',number(values.pipeline_input_tokens)],['All passes · output tokens',number(values.pipeline_output_tokens)]);
+  }
   if(Number.isFinite(values.input_tokens) && values.effective_context_length>0){
     more.push(['Input share of context',number(100*values.input_tokens/values.effective_context_length)+'%']);
   }
   return `<dl class="lab-metrics">${pairs.map(([key,value]) => `<div><dt>${key}</dt><dd>${value}</dd></div>`).join('')}</dl>
-    ${Number.isFinite(values.output_tokens) ? `<details><summary>Measurement details</summary><p class="lab-note">Ollama reports generation speed and token counts, including internal generation. Resident VRAM is sampled after the response.</p><dl class="lab-extra-metrics">${more.map(([k,v])=>`<div><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl></details>` : ''}`;
+    ${Number.isFinite(values.output_tokens) ? `<details><summary>Measurement details</summary><p class="lab-note">Token counts come from the local runtime and can include internal generation. Resident VRAM, when available, is sampled after generation.</p><dl class="lab-extra-metrics">${more.map(([k,v])=>`<div><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl></details>` : ''}`;
 }
 function traceEvents(events = []) {
   if (!events.length) return '<p class="lab-note">No trace events recorded.</p>';
@@ -82,6 +85,7 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
   let selectedCase = '';
   let suites = [], inventoryStatus = {};
   let overview = {};
+  let closeStrategy;
   let rows = [];
   let loading = true;
   let submitting = false;
@@ -93,6 +97,7 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
     ['history','History','history'], ['cases','Test cases','bookmark'],
     ['models','Models','sliders'],
     ['overview','Performance','trace'],
+    ['strategy','Strategy table','flask'],
   ];
 
   function initialDraft() {
@@ -124,7 +129,7 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
   function form() {
     const pinned = draft.source_run_id || draft.context.length || draft.history.length;
     return `<form class="lab-form" data-form="comparison"><div class="lab-section-intro"><div><h2>New comparison</h2><p>Run one prompt through two local configurations, one after the other.</p></div></div>
-      ${online && installed.length ? '' : `<div class="lab-banner">${icon('info')}<span>${online ? 'Ollama has no local models installed.' : 'Ollama is offline. Start it to run a comparison.'}</span>${button('refresh','Refresh','refresh')}</div>`}
+      ${online && installed.length ? '' : `<div class="lab-banner">${icon('info')}<span>${online ? 'The local runtime has no chat models available.' : 'Start a local inference provider to run a comparison.'}</span>${button('refresh','Refresh','refresh')}</div>`}
       <label class="lab-prompt">Test prompt<textarea name="prompt" required maxlength="12000" rows="3" placeholder="What would you like to test?">${escape(draft.prompt)}</textarea></label>
       ${pinned ? `<div class="lab-toolbar"><p class="lab-note">Captured input · ${number(draft.history.length)} prior message${draft.history.length===1?'':'s'} · ${number(draft.context.length)} reference${draft.context.length===1?'':'s'}</p>${button('clear-context','Remove captured context')}</div>` : ''}
       ${draft.source_redacted || draft.redacted ? '<p class="lab-note">The saved input masks recognized credentials. Replay uses the masked text.</p>' : ''}
@@ -172,6 +177,7 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
       <div class="lab-actions">${button('use-trace','Use in comparison','sliders',true)}</div>`;
   }
   function listings() {
+    if(tab==='strategy')return '<div data-strategy></div>';
     if(tab==='overview'){
       const ram=overview.system_memory;
       return `<div class="lab-section-intro"><div><h2>Runtime performance</h2><p>Newest ${number(overview.runs)} runs, up to 200. Timings use completed runs.</p></div>${button('refresh','Refresh','refresh')}</div>
@@ -202,11 +208,18 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
       <div class="lab-body">${loading ? '<p class="lab-note" role="status">Loading laboratory…</p>' : view==='result' ? result() : view==='trace' ? traceDetail() : tab==='workbench' ? form() : listings()}</div></div>`;
   }
   async function load(nextTab = tab) {
+    closeStrategy?.(); closeStrategy=null;
     clearTimeout(timer);
     const current = ++request;
     tab = nextTab; view = nextTab==='workbench' ? 'form' : 'list'; loading = true; error = ''; rows = []; render();
     try {
-      if(tab==='overview'){
+      if(tab==='strategy'){
+        const {mountStrategy}=await import('./strategy.js');
+        if(!alive || current!==request)return;
+        loading=false;render();
+        closeStrategy=mountStrategy(root.querySelector('[data-strategy]'),{api});
+        return;
+      } else if(tab==='overview'){
         const data=await get('/api/lab/overview');
         if(!alive || current!==request)return;
         overview=data;
@@ -364,5 +377,5 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
   } else {
     load();
   }
-  return ()=>{alive=false;++request;clearTimeout(timer);handle.abort();};
+  return ()=>{alive=false;++request;clearTimeout(timer);closeStrategy?.();handle.abort();};
 }

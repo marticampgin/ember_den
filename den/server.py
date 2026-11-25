@@ -20,10 +20,12 @@ from .insights import overview
 from .cancel import Cancellation
 from .engine import Engine, checked_text
 from .laboratory import Laboratory
-from .provider import Ollama, ProviderError
+from .provider import ProviderError
+from .local_api import make_provider
 from .store import ConflictError, Store
 from .tools import Tools
 from .voice import Voice
+from .strategy import Strategy
 
 
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
@@ -37,10 +39,13 @@ class Application:
         self.documents = Documents(self.store.path)
         self.tools = Tools(data_dir)
         self.voice = Voice()
-        self.engine = Engine(self.store, provider or Ollama(), self.documents, tools=self.tools)
+        self.engine = Engine(self.store, provider or make_provider(), self.documents, tools=self.tools)
+        self.strategy = Strategy(self.store,self.engine)
         self.lab = Laboratory(self.store.path, self.engine.run_config, self.engine.provider.inventory)
 
     def route(self, method, path, body):
+        if path.startswith("/api/strategy/"):
+            return self.strategy.route(method,path,body)
         if path == "/api/lab/overview" and method == "GET":
             return 200, overview(self.store)
         if path == "/api/documents/import" and method == "POST":
@@ -252,9 +257,9 @@ def default_data_dir():
     return Path(root) / "Ember Den"
 
 
-def serve(port, data_dir, on_ready=None):
+def serve(port, data_dir, on_ready=None, *, provider=None):
     with data_lock(Path(data_dir)), ThreadingHTTPServer(("127.0.0.1", port), Handler) as server:
-        server.app = Application(data_dir)
+        server.app = Application(data_dir, provider=provider)
         url = f"http://127.0.0.1:{server.server_port}"
         print(f"Ember Den is ready at {url}", flush=True)
         if on_ready:
@@ -266,9 +271,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--data-dir", type=Path, default=default_data_dir())
+    parser.add_argument("--provider", choices=("auto","ollama","openai-compatible"), default="auto",
+                        help="Local model inventory to use. Auto discovers both transports.")
+    parser.add_argument("--provider-port", type=int, default=8080,
+                        help="Compatible API loopback port (default 8080, LM Studio commonly uses 1234).")
     args = parser.parse_args()
+    if not 1 <= args.provider_port <= 65535:
+        parser.error("--provider-port must be between 1 and 65535.")
     try:
-        serve(args.port, args.data_dir)
+        serve(args.port, args.data_dir, provider=make_provider(args.provider,args.provider_port))
     except KeyboardInterrupt:
         pass
     except (OSError, RuntimeError) as exc:

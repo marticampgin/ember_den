@@ -206,7 +206,8 @@ class Engine:
             return round((time.perf_counter() - started) * 1000, 2)
 
         def snapshot(error=None):
-            captured = {"provider": self.provider.name if route == "chat" else "Built-in",
+            label = getattr(self.provider, "label_for", None)
+            captured = {"provider": (label(model) if label else self.provider.name) if route == "chat" else "Built-in",
                         "route": route, "model_digest": digest, "config": config,
                         "response": "".join(chunks), "events": events, "context": result_context,
                         "history": result_history, "error": error, "workflow_passes": passes,
@@ -259,7 +260,9 @@ class Engine:
                     raise ProviderError("No matching local model. Install a chat model in Ollama or select one in Settings.")
                 config["model"] = model
                 model, reason = route_model(prompt, config, by_name)
-                if config["routing_mode"] == "model" and config["specialist_model"] in by_name:
+                if config["routing_mode"] == "model" and config["specialist_model"] not in by_name:
+                    yield stage("Fallback", "No available specialist. Skipping classification and using the primary model.")
+                elif config["routing_mode"] == "model":
                     yield stage("Router", f"Classifying the request with {config['router_model'] or config['model']}.")
                     try:
                         with signal.slot(self.model_slot):
@@ -320,11 +323,11 @@ class Engine:
                 with signal.slot(self.model_slot):
                     for packet in response_pipeline(self.provider, messages, config, by_name, model, signal, passes):
                         signal.check()
-                        if "stage" in packet:
-                            yield stage(packet["stage"], packet["detail"])
                         if "selected" in packet:
                             model = packet["selected"]
                             digest = by_name[model].get("digest")
+                        if "stage" in packet:
+                            yield stage(packet["stage"], packet["detail"])
                         if "metrics" in packet:
                             metrics.update(packet["metrics"])
                         if packet.get("text"):

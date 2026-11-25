@@ -120,9 +120,9 @@ export async function mountSettings(root, refreshStatus) {
   pane.innerHTML = `
     <form class="settings-form">
       <section><h2>Local inference</h2>
-        <div class="field-row"><div><label for="settings-model">Active model</label><p>Installed models provided by Ollama.</p></div><select name="model" id="settings-model"></select></div>
+        <div class="field-row"><div><label for="settings-model">Active model</label><p data-runtime-hint>Choose a model from a local runtime.</p></div><select name="model" id="settings-model"></select></div>
         <div class="field-row"><div><label for="temperature">Temperature</label><p>Lower values favor more consistent replies.</p></div><div class="range-field"><input type="range" id="temperature" name="temperature" min="0" max="2" step="0.05"><output for="temperature"></output></div></div>
-        <div class="field-row"><div><label for="context-length">Context window</label><p>Maximum number of tokens per request.</p></div><input type="number" name="context_length" id="context-length" min="1024" max="16384" step="1" required></div>
+        <div class="field-row"><div><label for="context-length">Context window</label><p data-context-hint>Maximum number of tokens per request.</p></div><input type="number" name="context_length" id="context-length" min="1024" max="16384" step="1" required></div>
       </section>
       <section><h2>Routing and retrieval</h2><div class="config-fields">${advancedConfig(settings, status)}</div></section>
       <section><h2>Companion</h2>
@@ -134,14 +134,38 @@ export async function mountSettings(root, refreshStatus) {
     </form>`;
   const form = pane.querySelector('form');
   const controls = form.elements;
-  const choices = (status.models || []).map(model => model.name);
+  const inventory = new Map((status.models || []).map(model => [model.name, model]));
+  const choices = [...inventory.keys()];
   if (settings.model && !choices.includes(settings.model)) choices.push(settings.model);
-  for (const name of choices) controls.model.add(new Option(name, name));
+  const groups = new Map();
+  for (const name of choices) {
+    const model = inventory.get(name);
+    const provider = model?.provider || status.provider || 'Local runtime';
+    if (!groups.has(provider)) {
+      const group = document.createElement('optgroup');
+      group.label = provider;
+      groups.set(provider, group);
+      controls.model.append(group);
+    }
+    groups.get(provider).append(new Option(model?.display_name || name, name));
+  }
   if (!choices.length) {
-    controls.model.add(new Option(status.online ? 'No models installed' : 'Ollama offline', ''));
+    controls.model.add(new Option(status.online ? 'No models installed' : 'Local runtime offline', ''));
     controls.model.disabled = true;
   }
   if (settings.model) controls.model.value = settings.model;
+  const explainRuntime = () => {
+    const model = inventory.get(controls.model.value);
+    const compatible = controls.model.value.startsWith('local-api/');
+    pane.querySelector('[data-runtime-hint]').textContent = compatible
+      ? (model?.provider || 'Local compatible API') + '. Hardware placement is controlled by this server. Select Auto in Ember.'
+      : 'Local Ollama. Models from a running llama.cpp or LM Studio endpoint appear in a separate group.';
+    pane.querySelector('[data-context-hint]').textContent = compatible
+      ? 'Ember uses this input budget. Set the allocated context window in llama.cpp or LM Studio.'
+      : 'Context window requested from Ollama for each response.';
+  };
+  controls.model.addEventListener('change', explainRuntime);
+  explainRuntime();
   controls.temperature.value = settings.temperature;
   controls.context_length.value = settings.context_length;
   controls.memory_enabled.checked = Boolean(settings.memory_enabled);
