@@ -42,6 +42,9 @@
 .lab-check {padding:14px 0 0}
 .lab-check summary span {font-weight:400;color:var(--lab-muted);margin-left:6px}
 .lab-check .lab-note {margin-top:6px}
+.lab-check[open] > label,.lab-check [data-expected-field] {margin-top:12px}
+.lab label.lab-toggle {display:flex;align-items:center;gap:9px;font-weight:500}
+.lab label.lab-toggle input {width:16px;height:16px;min-height:0;flex-shrink:0;margin:0;accent-color:var(--lab-accent)}
 .lab-actions {justify-content:flex-end;flex-wrap:wrap}
 .lab-btn,.lab-dialog .lab-btn {display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:39px;padding:8px 14px;background:var(--lab-surface);border:1px solid var(--lab-line);border-radius:6px;font:600 13px/1.4 var(--sans,system-ui);color:var(--lab-ink);cursor:pointer}
 .lab-btn:hover:not(:disabled) {border-color:var(--lab-accent);color:var(--lab-accent)}

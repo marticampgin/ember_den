@@ -7,9 +7,11 @@ export function advancedConfig(cfg, status, arm) {
   const embeddings = (status.embedding_models || []).map(m => [m.name,m.name]);
   const fields = [
     ['memory_strategy','Memory sources',[['notes','Saved notes'],['episodes','Earlier conversations'],['both','Notes and earlier conversations']]],
+    ['history_mode','Long conversations',[['window','Recent messages'],['recap','Recent messages and earlier excerpts']]],
     ['retrieval_mode','Document search',[['keyword','Keyword'],['semantic','Semantic'],['hybrid','Hybrid'],['off','Off']]],
     ['embedding_model','Embedding model',[['','Automatic'],...embeddings]],
     ['routing_mode','Model routing',[['fixed','Fixed model'],['adaptive','Adaptive rules'],['model','Local classifier']]],
+    ['tool_mode','Tool selection',[['natural','Requests and slash commands'],['commands','Slash commands only'],['off','Off']]],
     ['router_model','Routing model',[['','Primary model'],...models]],
     ['specialist_model','Specialist model',[['','Primary model'],...models]],
     ['workflow','Response workflow',[['direct','Direct answer'],['revise','Draft and revise']]],

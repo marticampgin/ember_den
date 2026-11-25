@@ -50,12 +50,19 @@ function traceEvents(events = []) {
   if (!events.length) return '<p class="lab-note">No trace events recorded.</p>';
   return `<p class="lab-event-clock">Elapsed since request start</p><ol class="lab-events">${events.map(event => `<li><div><strong>${escape(event.stage)}</strong><span>${duration(event.elapsed_ms)}</span></div><p>${escape(typeof event.detail === 'string' ? event.detail : JSON.stringify(event.detail))}</p></li>`).join('')}</ol>`;
 }
+function toolDetails(run) {
+  const tool=run.tool_execution;
+  if (!tool) return '';
+  const title=tool.tool ? 'Tool call · '+tool.tool : 'Tool selection';
+  return `<details><summary>${escape(title)}</summary><p class="lab-note">${escape(tool.reason)}</p><pre>${escape(JSON.stringify({selection:tool.mode,execution:tool.execution,permission:tool.permission,input:tool.input,output:tool.output,available:tool.available,catalog_revision:tool.catalog_revision,original_catalog_revision:tool.original_catalog_revision},null,2))}</pre></details>`;
+}
 function capturedReferences(refs = []) {
   if (!refs.length) return '<p class="lab-note">No references retrieved.</p>';
   return `<ul class="lab-references">${refs.map(item => {
     const lines = item.line_start == null ? '' : ` · lines ${item.line_start}–${item.line_end ?? item.line_start}`;
-    if(item.kind==='episode'){
-      return `<li><strong>${item.conversation_id?`<a href="#chat/${encodeURIComponent(item.conversation_id)}">Earlier conversation</a>`:'Earlier conversation'}</strong><p>${escape(item.text)}</p></li>`;
+    if(item.kind==='episode' || item.kind==='recap'){
+      const title=item.kind==='recap'?'Earlier turn in this conversation':'Earlier conversation';
+      return `<li><strong>${item.conversation_id?`<a href="#chat/${encodeURIComponent(item.conversation_id)}">${title}</a>`:title}</strong><p>${escape(item.text)}</p></li>`;
     }
     if (item.kind==='web') {
       const title = escape(item.name || 'Public source');
@@ -69,6 +76,17 @@ function capturedReferences(refs = []) {
     const name = item.kind==='document' ? (item.name || 'Document') + lines : 'Saved memory';
     return `<li><strong>${escape(name)}</strong><p>${escape(item.text)}</p></li>`;
   }).join('')}</ul>`;
+}
+
+const checkFields = {
+  contains:['Response must contain','A word or phrase','Ignores capitalization. Leave the phrase empty to skip this check.'],
+  exact:['Expected answer','The complete answer','Compares the complete answer, ignoring capitalization and outer whitespace.'],
+  source:['Expected filename','station.pdf','Checks the filenames of retrieved sources in each run.'],
+  json:['','','Checks that the response parses as a JSON object or array.'],
+};
+function expectedField(mode, value) {
+  const [label, placeholder, hint]=checkFields[mode] || checkFields.contains;
+  return `${label ? `<label>${label}<input name="expected" maxlength="2000" value="${escape(value)}" placeholder="${placeholder}"></label>` : ''}<p class="lab-note">${hint}</p>`;
 }
 
 export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = null}) {
@@ -123,7 +141,7 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
       <label>Model<select required name="model${index}" data-config="${index}" data-key="model" ${installed.length ? '' : 'disabled'}>${missing ? `<option selected value="${escape(cfg.model)}">${escape(cfg.model)} (unavailable)</option>` : ''}${opts || '<option value="">No installed models</option>'}</select></label>
       <p class="lab-model-spec" data-spec="${index}">${escape([selected?.family, selected?.parameters, selected?.quantization].filter(Boolean).join(' · '))}</p>
       <div class="lab-fields">${scalar('temperature','Temperature',0,2,0.01)}${scalar('context_length','Context window',1024,16384,1)}</div>
-      <details class="lab-advanced"><summary>Advanced settings</summary><div>${scalar('seed','Random seed',0,2147483647,1,true)}<label>System prompt<textarea rows="3" maxlength="4000" data-config="${index}" data-key="system_prompt">${escape(cfg.system_prompt)}</textarea></label>${advancedConfig(cfg,inventoryStatus,index)}${button('profile-'+index,'Configuration profiles')}</div></details>
+      <details class="lab-advanced"><summary>Advanced settings</summary><div>${scalar('seed','Random seed',0,2147483647,1,true)}<label>System prompt<textarea rows="3" maxlength="4000" data-config="${index}" data-key="system_prompt">${escape(cfg.system_prompt)}</textarea></label><label class="lab-toggle"><input type="checkbox" data-config="${index}" data-key="memory_enabled" ${cfg.memory_enabled!==false?'checked':''}>Use personal memory</label>${advancedConfig(cfg,inventoryStatus,index)}${button('profile-'+index,'Configuration profiles')}</div></details>
     </section>`;
   }
   function form() {
@@ -134,9 +152,10 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
       ${pinned ? `<div class="lab-toolbar"><p class="lab-note">Captured input · ${number(draft.history.length)} prior message${draft.history.length===1?'':'s'} · ${number(draft.context.length)} reference${draft.context.length===1?'':'s'}</p>${button('clear-context','Remove captured context')}</div>` : ''}
       ${draft.source_redacted || draft.redacted ? '<p class="lab-note">The saved input masks recognized credentials. Replay uses the masked text.</p>' : ''}
       <div class="lab-cols">${formCard(0)}${formCard(1)}</div>
-      <label><input type="checkbox" name="live_retrieval" ${draft.live_retrieval?'checked':''}> Retrieve current library sources separately for each configuration</label>
-      <details class="lab-check" ${draft.expected ? 'open' : ''}><summary>Expected text check <span>Optional</span></summary><label>Response must contain<input name="expected" maxlength="2000" value="${escape(draft.expected)}" placeholder="A word or phrase to check in each answer"></label><p class="lab-note">Ignores capitalization. A match checks only the phrase you enter.</p></details>
-      <label>Evaluation method<select name="check_mode">${[['contains','Contains expected phrase'],['exact','Exact expected answer'],['json','Valid JSON object or array'],['source','Retrieved expected filename']].map(([v,t])=>`<option value="${v}" ${(draft.check_mode||'contains')===v?'selected':''}>${t}</option>`).join('')}</select></label>
+      <label class="lab-toggle"><input type="checkbox" name="live_retrieval" ${draft.live_retrieval?'checked':''}>Retrieve current library sources separately for each configuration</label>
+      <details class="lab-check" ${draft.expected || draft.check_mode==='json' ? 'open' : ''}><summary>Evaluation check <span>Optional</span></summary>
+        <label>Evaluation method<select name="check_mode">${[['contains','Contains expected phrase'],['exact','Exact expected answer'],['json','Valid JSON object or array'],['source','Retrieved expected filename']].map(([v,t])=>`<option value="${v}" ${(draft.check_mode||'contains')===v?'selected':''}>${t}</option>`).join('')}</select></label>
+        <div data-expected-field>${expectedField(draft.check_mode,draft.expected)}</div></details>
       <div class="lab-actions">${button('save-case','Save test case','bookmark',false,!installed.length)}<button class="lab-btn lab-primary" type="submit" ${!online || !installed.length || submitting ? 'disabled' : ''}>${icon('play')}${submitting ? 'Starting…' : 'Run comparison'}</button></div>
     </form>`;
   }
@@ -144,13 +163,14 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
     const model = record.snapshot.models?.[index] || {};
     const cfg = record.snapshot.configs[index];
     const run = item.run;
+    const selection = {natural:'Requests and commands', commands:'Slash commands only', off:'Off'}[cfg.tool_mode] || 'Legacy settings';
     const message = item.status==='pending' ? 'Waiting for the first configuration to finish.' : 'Generating a response locally…';
     return `<section class="lab-config lab-result"><header><span class="lab-letter">${item.label}</span><h3>Configuration ${item.label}</h3>${statusTag(item.status)}</header>
-      <b class="lab-model-name">${escape(cfg.model)}</b><p class="lab-note">Temperature ${escape(cfg.temperature)} · Context ${number(cfg.context_length)}</p>
+      <b class="lab-model-name">${escape(run?.model || cfg.model)}</b><p class="lab-note">${run?.tool_execution?.tool ? escape(run.tool_execution.tool+' · '+run.tool_execution.execution) : 'Temperature '+escape(cfg.temperature)+' · Context '+number(cfg.context_length)} · Tools: ${escape(selection)}</p>
       ${run ? metrics(run.metrics) : ''}${item.error ? `<p class="lab-error" role="status">${escape(item.error)}</p>` : ''}
       ${run?.response ? `<div class="lab-response">${escape(run.response)}</div>` : !run && !item.error ? `<p class="lab-note">${message}</p>` : ''}
       ${typeof item.check === 'boolean' ? `<p class="lab-verdict" data-pass="${item.check}">${escape(({contains:'Expected text',exact:'Exact answer',json:'JSON format',source:'Retrieved filename'})[record.snapshot.check_mode||'contains'])} ${item.check ? 'matched' : 'missing'}</p>` : ''}
-      ${run ? `<details><summary>Execution trace</summary>${traceEvents(run.events)}${run.context?.length ? capturedReferences(run.context) : ''}</details>` : ''}
+      ${run ? `<details><summary>Execution trace</summary>${traceEvents(run.events)}${run.context?.length ? capturedReferences(run.context) : ''}${toolDetails(run)}</details>` : ''}
       <details><summary>Recorded configuration</summary><pre>${escape(JSON.stringify({model:model.name || cfg.model,digest:model.digest || null,...cfg},null,2))}</pre></details></section>`;
   }
   function result() {
@@ -172,8 +192,8 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
     return `<div class="lab-toolbar">${button('back','All traces','back')}<span>${escape(when(record.created_at))}</span></div><section class="lab-record-heading"><div><h2>Execution trace</h2>${statusTag(record.status)}</div><p>${escape(record.prompt)}</p><small>${escape(record.model)} · ${escape(record.source)}</small></section>
       ${metrics(record.metrics)}${record.error ? `<p class="lab-error">${escape(record.error)}</p>` : ''}
       <section class="lab-panel"><h3>Recorded events</h3>${traceEvents(record.events)}<details><summary>Response</summary><div class="lab-response">${escape(record.response || 'No response recorded.')}</div></details>
-      <details><summary>Retrieved references (${record.context?.length || 0})</summary>${capturedReferences(record.context)}</details>
-      <details><summary>Configuration and conversation history</summary><pre>${escape(JSON.stringify({configuration:record.config,history:record.history || [],retrieval:record.retrieval,model_passes:record.workflow_passes},null,2))}</pre></details></section>
+      <details><summary>Retrieved references (${record.context?.length || 0})</summary>${capturedReferences(record.context)}</details>${toolDetails(record)}
+      <details><summary>Configuration and conversation history</summary><pre>${escape(JSON.stringify({configuration:record.config,history:record.history || [],context_budget:record.context_budget,retrieval:record.retrieval,model_passes:record.workflow_passes},null,2))}</pre></details></section>
       <div class="lab-actions">${button('use-trace','Use in comparison','sliders',true)}</div>`;
   }
   function listings() {
@@ -280,13 +300,17 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
     if (!input.closest('[data-form="comparison"]')) return;
     if (input.dataset.config !== undefined) {
       const idx=Number(input.dataset.config), key=input.dataset.key;
-      draft.configs[idx][key]=input.type==='number' ? (input.value==='' ? null : Number(input.value)) : input.value;
+      draft.configs[idx][key]=input.type==='checkbox' ? input.checked : input.type==='number' ? (input.value==='' ? null : Number(input.value)) : input.value;
       if (key==='model') {
         const model=installed.find(m=>m.name===input.value);
         root.querySelector(`[data-spec="${idx}"]`).textContent=[model?.family,model?.parameters,model?.quantization].filter(Boolean).join(' · ');
       }
     } else if (input.name==='live_retrieval') draft.live_retrieval=input.checked;
-    else if (['prompt','expected','check_mode'].includes(input.name)) draft[input.name]=input.value;
+    else if (input.name==='check_mode') {
+      draft.check_mode=input.value;
+      if (draft.check_mode==='json') draft.expected='';
+      root.querySelector('[data-expected-field]').innerHTML=expectedField(draft.check_mode,draft.expected);
+    } else if (['prompt','expected'].includes(input.name)) draft[input.name]=input.value;
   }
   async function runComparison(replay=false) {
     if (submitting) return;
@@ -362,7 +386,10 @@ export function mountLaboratory(root, {api, notify = () => {}, initialTraceId = 
         if(!alive || tab!=='workbench' || !draft) return;
         draft.prompt=captured.prompt; draft.source_run_id=captured.id;
         draft.source_redacted=!!captured.redacted;
-        draft.context=captured.context || []; draft.history=captured.history || [];
+        const references=captured.context || [];
+        draft.context=[...references.filter(item=>item.kind!=='recap'),
+          ...(captured.recap_candidates?.length ? captured.recap_candidates : references.filter(item=>item.kind==='recap'))];
+        draft.history=captured.history || [];
         const selectedModel = captured.route==='chat' ? (captured.config?.model || captured.model) : draft.configs[0].model;
         draft.configs[0]={...draft.configs[0],...captured.config,model:selectedModel,seed:captured.config?.seed ?? null};
         render();break;
