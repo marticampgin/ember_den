@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#262422">
+  <meta name="description" content="Ember Den, a local AI companion and model laboratory.">
+  <title>The clearing · Ember Den</title>
+  <link rel="icon" href="./fox-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./style.css">
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <a href="#page-content" class="skip-link">Skip to workspace</a>
+  <header class="topbar">
+    <button type="button" id="menu-toggle" class="menu-toggle icon-button" aria-controls="sidebar" aria-expanded="false" aria-label="Open navigation"></button>
+    <a class="brand" href="#companion" aria-label="Ember Den companion"><img src="./fox-mark.svg" width="34" height="32" alt=""><span>Ember Den</span></a>
+    <button type="button" id="runtime-indicator" title="Open runtime settings"><span aria-hidden="true" class="dot status-dot"></span><span id="runtime-label">Checking runtime</span></button>
+  </header>
+  <div class="layout">
+    <button class="backdrop" id="nav-backdrop" type="button" aria-label="Close navigation" hidden></button>
+    <aside class="sidebar" id="sidebar" aria-label="Workspace navigation">
+      <nav class="main-nav" aria-label="Workspace"></nav>
+      <section class="side-history" aria-labelledby="history-title">
+        <button type="button" class="button new-chat primary" id="new-chat"></button>
+        <h2 id="history-title">History</h2>
+        <div id="history-list"></div>
+      </section>
+      <button class="model-status" id="model-status" type="button" title="Change active model">
+        <span class="model-icon" aria-hidden="true"></span>
+        <span class="model-detail"><span class="model-caption">Active model</span><span id="model-name">Checking…</span></span>
+        <span class="model-chevron" aria-hidden="true"></span>
+      </button>
+    </aside>
+    <main id="page-content" class="page-content" tabindex="-1"></main>
+  </div>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <noscript>Enable JavaScript to open your local companion.</noscript>
+</body>
+</html>

@@ -1,0 +1,18 @@
+ember-library { display: block; }
+.library-section { margin-top: 36px; padding-top: 26px; border-top: 1px solid #d8d1c7; }
+.library-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.library-heading h2 { margin: 0; font: 500 27px/1.2 Georgia, serif; }
+.library-heading p, .library-prompt { color: #615b54; line-height: 1.5; }
+.library-heading p { font-size: 14px; margin: 7px 0 0; }
+.library-heading .button { white-space: nowrap; }
+.library-row { margin-top: 13px; padding: 9px 0; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid #ded8ce; }
+.library-name { border: 0; padding: 6px 0; background: none; display: flex; align-items: center; gap: 9px; color: inherit; text-align: left; }
+.library-name span, .library-preview { overflow-wrap: anywhere; }
+.library-name:hover { text-decoration: underline; }
+.library-size { margin-left: auto; font-size: 12px; color: #675e55; white-space: nowrap; }
+.library-preview { max-height: 55vh; overflow-y: auto; white-space: pre-wrap; font: 14px/1.6 Consolas, monospace; }
+@media (max-width: 520px) {
+  .library-heading { align-items: flex-start; }
+  .library-size { display: none; }
+  .library-row .icon-button { margin-left: auto; }
+}
