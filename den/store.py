@@ -65,9 +65,17 @@ class Store:
 
     def recover(self):
         with self.connect() as db:
-            db.execute("""UPDATE runs SET status='error', snapshot=json_set(
-                       snapshot, '$.error', 'Interrupted when Ember Den stopped.')
-                       WHERE status='running'""")
+            unfinished = db.execute("SELECT id, source, snapshot FROM runs WHERE status='running'").fetchall()
+            for run in unfinished:
+                snapshot = json.loads(run["snapshot"])
+                snapshot["error"] = "Interrupted when Ember Den stopped."
+                snapshot.setdefault("events", []).append({"stage": "Interrupted", "detail": snapshot["error"],
+                                                          "elapsed_ms": None})
+                db.execute("UPDATE runs SET status='error', snapshot=? WHERE id=?",
+                           (json.dumps(snapshot), run["id"]))
+                if run["source"] == "chat" and snapshot.get("response"):
+                    db.execute("INSERT INTO messages(run_id,role,content) VALUES(?,'assistant',?)",
+                               (run["id"], snapshot["response"]))
 
     def settings(self):
         with self.connect() as db:
@@ -133,7 +141,7 @@ class Store:
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             if source == "chat":
-                title = " ".join(prompt.split())
+                title = " ".join(trace_prompt.split())
                 if conversation_id is None:
                     conversation_id = new_id()
                     db.execute("INSERT INTO conversations VALUES (?, ?, ?)",
@@ -166,6 +174,11 @@ class Store:
             if answer is not None:
                 db.execute("INSERT INTO messages(run_id,role,content) VALUES(?,'assistant',?)",
                            (run_id, answer))
+
+    def checkpoint(self, run_id, model, metrics, snapshot):
+        with self.connect() as db:
+            db.execute("UPDATE runs SET model=?, metrics=?, snapshot=? WHERE id=? AND status='running'",
+                       (model, json.dumps(metrics), json.dumps(snapshot), run_id))
 
     def runs(self):
         with self.connect() as db:

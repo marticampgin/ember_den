@@ -110,11 +110,27 @@ class EngineTests(unittest.TestCase):
             self.engine.model_slot.release()
             stream.close()
 
+    def test_abrupt_shutdown_recovers_checkpoint_and_partial_reply_once(self):
+        run_id, conversation_id = self.store.begin("Hello", "Hello", "chat", None, {"model": "fox"})
+        self.store.checkpoint(run_id, "fox", {"ttft_ms": 42}, {
+            "events": [{"stage": "Generation", "elapsed_ms": 35}], "response": "Partial",
+        })
+        self.store.recover()
+        self.store.recover()
+        run = self.store.run(run_id)
+        self.assertEqual(run["metrics"]["ttft_ms"], 42)
+        self.assertEqual([e["stage"] for e in run["events"]], ["Generation", "Interrupted"])
+        transcript = self.store.conversation(conversation_id)["messages"]
+        self.assertEqual(len(transcript), 2)
+        self.assertEqual(transcript[-1]["content"], "Partial")
+        self.assertEqual(transcript[-1]["status"], "error")
+
     def test_trace_masks_common_credentials_without_modifying_personal_transcript(self):
         stream = self.turn("What is api_key=secret_example ?")
         run = self.store.run(stream[0]["run_id"])
         self.assertNotIn("secret_example", json.dumps(run))
         self.assertTrue(run["redacted"])
+        self.assertNotIn("secret_example", self.store.conversations()[0]["title"])
         self.assertIn("secret_example", self.store.conversation(stream[0]["conversation_id"])["messages"][0]["content"])
 
     def test_settings_and_lab_replay_isolation(self):
@@ -130,6 +146,10 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self.store.conversations(), [])
         with self.assertRaises(ValueError):
             self.engine.save_settings({"model": "missing"})
+        self.engine.save_settings({"model": "fox"})
+        self.provider.offline = True
+        self.engine.save_settings({"model": "fox", "memory_enabled": True})
+        self.assertTrue(self.store.settings()["memory_enabled"])
         for invalid in ({"temperature": True}, {"context_length": 33}, {"seed": -1}, {"inject": True}):
             with self.subTest(config=invalid), self.assertRaises(ValueError):
                 validate_config(invalid)

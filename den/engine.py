@@ -134,7 +134,7 @@ class Engine:
 
     def save_settings(self, changes):
         config = validate_config(changes)
-        if changes.get("model"):
+        if changes.get("model") and changes["model"] != self.store.settings().get("model"):
             if changes["model"] not in [m["name"] for m in self.provider.inventory()]:
                 raise ValueError("Choose an installed local chat model.")
         self.store.save_settings({key: config[key] for key in changes})
@@ -168,13 +168,24 @@ class Engine:
         result_context, result_history = [], []
         expression = calculator_expression(prompt) if source == "chat" else None
         route = "calculator" if expression is not None else "chat"
+        next_checkpoint = 0.0
 
         def elapsed():
             return round((time.perf_counter() - started) * 1000, 2)
 
+        def snapshot(error=None):
+            captured = {"provider": self.provider.name if route == "chat" else "Built-in",
+                        "route": route, "model_digest": digest, "config": config,
+                        "response": "".join(chunks), "events": events, "context": result_context,
+                        "history": result_history, "error": error}
+            result = protected(captured)
+            result["redacted"] = protected(prompt) != prompt or result != captured
+            return result
+
         def stage(name, detail):
             event = {"stage": name, "detail": detail, "elapsed_ms": elapsed()}
             events.append(event)
+            self.store.checkpoint(run_id, model, metrics, snapshot())
             return {"type": "stage", **event}
 
         try:
@@ -233,6 +244,10 @@ class Engine:
                             if not chunks:
                                 metrics["ttft_ms"] = elapsed()
                             chunks.append(packet["text"])
+                            now = time.monotonic()
+                            if now >= next_checkpoint:
+                                self.store.checkpoint(run_id, model, metrics, snapshot())
+                                next_checkpoint = now + 2
                             yield {"type": "token", "text": packet["text"]}
                 if not "".join(chunks).strip():
                     raise ProviderError("The model returned an empty answer. Try another model or a shorter prompt.")
@@ -257,13 +272,7 @@ class Engine:
                 events.append({"stage": name, "detail": failure, "elapsed_ms": elapsed()})
             metrics["total_ms"] = elapsed()
             response = "".join(chunks)
-            captured = {"provider": self.provider.name if route == "chat" else "Built-in",
-                        "route": route, "model_digest": digest, "config": config,
-                        "response": response, "events": events, "context": result_context,
-                        "history": result_history, "error": failure}
-            snapshot = protected(captured)
-            snapshot["redacted"] = protected(prompt) != prompt or snapshot != captured
-            self.store.finish(run_id, status, model, metrics, snapshot,
+            self.store.finish(run_id, status, model, metrics, snapshot(failure),
                               response if response and source == "chat" else None)
         if failure:
             yield {"type": "error", "error": protected(failure), "run_id": run_id,
