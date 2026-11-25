@@ -1,0 +1,29 @@
+# Verification notes
+
+The Windows acceptance runs on November 25, 2026 used disposable workspaces on a machine with an RTX 4070, 12 GB VRAM and 16 GB system RAM. Personal chat history and microphone recordings were excluded. Results below apply to these versions, fixtures, installed models and hardware.
+
+The integrated Python suite passed 63 tests with both native and optional speech tests enabled, with zero skips. Separate Chromium runs exercised chat, the laboratory, tools, voice, the strategy table and cross-provider inference. Browser screenshots used synthetic data.
+
+| Surface | Evidence |
+| --- | --- |
+| Conversation | Streamed local answers, reloads, cancellation, retained partial replies, feedback, and recovery after an interrupted write. A 12-turn Qwen session recovered the telescope nickname “Amber Finch” and the 410 mm aperture with 22 preceding messages in context. |
+| Model inventory | All seven installed Ollama chat models returned visible text with a 4,096-token context. A separate 128-token cap caused two models to exhaust their answer budget before visible output. An explicit CPU-only run on the 0.5B model reported zero resident VRAM. |
+| Inference providers | A standalone CPU llama.cpp process answered in the companion and completed a two-arm lab comparison alongside native Ollama. The compatible transport also produced a pair of 1,024-dimensional vectors through a local embeddings endpoint. |
+| Routing and revision | Fixed and adaptive routing, a bounded local classifier, a specialist selection, sequential draft and revision, missing-model and invalid-classification fallbacks. Logs record the model identity and measured cost of each pass. |
+| Document retrieval | PDF page text, Word paragraphs, line-addressed Markdown, duplicate imports and source removal. A synthetic corpus of 163 documents exercised keyword, semantic and hybrid retrieval, vector reuse and revision invalidation. The three paraphrase queries were also used during tuning. |
+| Memory | Editable saved preferences, optional cross-chat excerpts with provenance, exclusion of the current conversation, and deletion of past chats. Saving a rating alone creates no preference memory. |
+| History budgeting | At a 1,024-token context, a chat with 40 prior messages kept 22 in full and included two attributed excerpts. Qwen recovered the first-turn callsign with excerpts enabled. The recent-messages baseline missed it. Replaying each arm after deleting the source conversation reproduced both outcomes. |
+| Laboratory | Persisted profiles, isolated A/B settings, optional expected-text, exact, JSON and source checks, suite history, human votes, local model assessments, and frozen retrieved inputs for replay. Replay tests cover changed and missing role-model revisions and previously redacted inputs. |
+| Starter suite | Six opt-in cases ran in both configurations on Qwen 3.5 2B. Both passed grounded reference, memory, JSON syntax and observed calculator checks. Both missed the strict time-format reasoning check. The conversation case is available for human review. Repeated imports preserved existing cases and personal settings. |
+| Voice | Windows speech and Vosk/Piper each completed a real recognition, chat, playback and listen-again cycle with a synthetic microphone. All microphone tracks closed during playback, after ending the session, when hiding the tab and when navigating away. The browser recovered from a removed microphone and obsolete voice preferences. One dictated run transcribed “Moon” as “won't.” On short hands-free replies, final voiced sample to playback measured 2.5 s with Windows speech and 3.0 s with Vosk/Piper. A longer Windows reply in review mode took 8.1 s including review. |
+| Tools | Live Wikipedia search and article reads, dated Open-Meteo forecasts with location disambiguation, direct commands and clear conversational intents. Tests inspect the actual export contents after approval and the absence of a file after decline. |
+| Web and news | A live general-web query returned five HTTPS results from five domains through Mwmbl. The headlines lookup returned dated reports across BBC, The Guardian and NPR. A local HTTP fixture exercised the optional SearXNG JSON contract and connection errors. The app retrieves the search response or publisher feed. Opening a linked article is a user action. |
+| Comparing tools | A captured Wikipedia request ran through natural-language and slash-command-only arms. Replay completed with identical frozen source data. Previewing an export in a comparison created neither an approval request nor a file. A legacy comparison retained its original behavior after migration. |
+| Strategy | The model and rule-based opponents played legal Kuhn poker hands using simulated chips. Tests exercised private card visibility, both seating positions, stale moves, restart, payoff accounting and fallback after an invalid model move. |
+| Presentation | Desktop and narrow Chromium viewports, keyboard controls, memory and settings dialogs, reduced motion, fox state changes, compact conversation scenes, mobile navigation and the voice composer. |
+
+## Interpreting results
+
+The model matrix is a load, streaming and instruction-following smoke test. Five correct exact answers out of seven on one prompt is insufficient to rank the models by overall quality. Similarly, retrieval hit rates on three tuning queries do not estimate accuracy on a personal document collection.
+
+The public retrieval adapters access specific public services. A calendar export is a local ICS file that the user can open in a calendar application. PDF import works with selectable text. Windows speech needs an installed English recognizer and voice. Physical-room acoustics, real handheld browsers, production-scale corpora and multi-day uptime remain outside the measured test conditions.
