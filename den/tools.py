@@ -252,7 +252,8 @@ class Tools:
     def _note(self, args):
         return args["title"], ".txt", args["title"] + "\n\n" + args["body"] + "\n"
 
-    def _event(self, args):
+    @staticmethod
+    def _event_dates(args):
         try:
             start = date.fromisoformat(args["date"])
             if start.isoformat() != args["date"]:
@@ -260,6 +261,10 @@ class Tools:
             end = start + timedelta(days=1)
         except (ValueError, OverflowError) as exc:
             raise ValueError("Use a valid all-day event date in YYYY-MM-DD format.") from exc
+        return start, end
+
+    def _event(self, args):
+        start, end = self._event_dates(args)
         lines = ["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//Ember Den//Local calendar//EN",
                  "CALSCALE:GREGORIAN","BEGIN:VEVENT",f"UID:{uuid.uuid4().hex}@ember.local",
                  "DTSTAMP:" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
@@ -278,6 +283,28 @@ class Tools:
                    (identifier,tool.name,title,filename,payload,now()))
         return {"response":f"Prepared {filename}. Review in Tools to approve or decline the export.",
                 "proposal_id":identifier, "events":[{"stage":"Approval", "detail":f"Pending approval for exports/{filename}."}]}
+
+    def experiment(self, name, arguments):
+        """Evaluate public reads or render an export preview without creating side effects."""
+        tool = self.registry[name]
+        try:
+            args = tool.validate(arguments)
+            if tool.permission == "approval required":
+                if name == "export_note":
+                    preview = f"Text note (.txt)\n{args['title']}\n\n{args['body']}"
+                elif name == "export_event":
+                    start, end = self._event_dates(args)
+                    preview = f"All-day calendar event (.ics)\n{args['title']}\nStart: {start}\nEnd (exclusive): {end}"
+                else:
+                    preview = tool.label + "\n" + json.dumps(args, ensure_ascii=False, sort_keys=True)
+                return {"tool":name, "status":"completed", "response":"Laboratory preview\n"+preview,
+                        "context":[], "events":[{"stage":"Preview","detail":"Rendered the approved-action arguments without invoking the action handler."}]}
+            if tool.permission != "public read":
+                raise ValueError("This tool cannot be executed in a comparison.")
+            return {**tool.handler(args), "tool":name, "status":"completed"}
+        except (ValueError, PublicSourceError) as exc:
+            return {"tool":name, "status":"error", "response":str(exc), "error":str(exc), "context":[],
+                    "events":[{"stage":"Tool error","detail":str(exc)}]}
 
     def run(self, name, arguments):
         if not isinstance(name,str) or name not in self.registry:
@@ -378,7 +405,7 @@ class Tools:
             return self.decide(match[1],match[2])
         return None
 
-    def _parse(self, prompt):
+    def parse(self, prompt):
         raw = prompt.strip()
         command, _, value = raw.partition(" ")
         tool = next((item for item in self.registry.values() if item.command == command.lower()), None)
@@ -400,10 +427,10 @@ class Tools:
         return None
 
     def accepts(self, prompt):
-        return self._parse(prompt) is not None
+        return self.parse(prompt) is not None
 
     def chat(self, prompt):
-        invocation = self._parse(prompt)
+        invocation = self.parse(prompt)
         if invocation is None:
             return None
         tool, args = invocation

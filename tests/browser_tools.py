@@ -1,5 +1,6 @@
 """Exercise chat commands, reviewed file approvals, and the optional live public-source flow."""
 import argparse
+import time
 from pathlib import Path
 
 from playwright.sync_api import expect, sync_playwright
@@ -62,6 +63,39 @@ def verify(page, url, live, screenshots):
         page.goto(url+"/#laboratory/trace/"+run["id"])
         page.get_by_text("Retrieved references (1)",exact=True).click()
         expect(page.locator(".lab-references a")).to_contain_text("Red fox")
+        page.get_by_role("button",name="Use in comparison").click()
+        expect(page.get_by_label("Test prompt")).to_have_value("Research Wikipedia for red fox")
+        for arm, mode in enumerate(("natural","commands")):
+            card=page.locator(".lab-config").nth(arm)
+            card.locator(".lab-advanced summary").click()
+            card.get_by_label("Tool selection").select_option(mode)
+            card.locator(".lab-advanced summary").click()
+        page.get_by_role("button",name="Run comparison",exact=True).click()
+        expect(page.locator(".lab-result [data-state=completed]")).to_have_count(2,timeout=180000)
+        job=page.request.get(url+"/api/lab/experiments").json()["experiments"][0]["id"]
+        record=page.request.get(url+"/api/lab/experiments/"+job).json()
+        a,b=[arm["run"] for arm in record["results"]]
+        assert a["tool_execution"]["tool"]=="wiki_research" and a["tool_execution"]["execution"]=="replay"
+        assert b["route"]=="chat" and b["tool_execution"]["mode"]=="commands"
+        if screenshots:
+            page.evaluate("window.scrollTo(0,0)")
+            page.screenshot(path=screenshots/"tools-arm-comparison.png",full_page=True)
+        with page.expect_response(lambda res: res.url.endswith("/"+job+"/replay")) as replay_response:
+            page.get_by_role("button",name="Replay comparison").click()
+        replay_id=replay_response.value.json()["id"]
+        deadline=time.monotonic()+180
+        while time.monotonic()<deadline:
+            replay=page.request.get(url+"/api/lab/experiments/"+replay_id).json()
+            if replay["status"]!="running":
+                break
+            time.sleep(0.2)
+        assert replay["status"]=="completed", [(r["status"],r["error"]) for r in replay["results"]]
+        assert replay["results"][0]["run"]["response"]==a["response"]
+        page.goto(url+"/#settings")
+        page.get_by_label("Tool selection").select_option("off")
+        page.get_by_role("button",name="Save settings",exact=True).click()
+        expect(page.get_by_text("Settings saved.",exact=True)).to_be_visible()
+        assert page.request.get(url+"/api/settings").json()["tool_mode"]=="off"
     page.goto(url+"/#tools")
     page.set_viewport_size({"width":390,"height":844})
     expect(page.get_by_role("heading",name="Public lookup")).to_be_visible()

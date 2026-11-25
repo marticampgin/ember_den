@@ -194,6 +194,36 @@ class Store:
                 ORDER BY messages.id DESC LIMIT 32""", (conversation_id,)).fetchall()
             return [dict(r) for r in reversed(rows)]
 
+    def history_source(self, conversation_id, query):
+        """Read the latest complete turns, plus a few excerpts from before that window."""
+        join = "FROM messages m JOIN runs r ON r.id=m.run_id WHERE r.conversation_id=? AND r.status='completed'"
+        with self.connect() as db:
+            total = db.execute("SELECT count(*) " + join, (conversation_id,)).fetchone()[0]
+            recent = db.execute("SELECT m.id,m.role,m.content,m.run_id,r.conversation_id " + join +
+                                " ORDER BY m.id DESC LIMIT 32", (conversation_id,)).fetchall()
+            recent = [dict(r) for r in reversed(recent)]
+            if len(recent) == total:
+                return recent, total, []
+            first_id = recent[0]["id"]
+            older = []
+            if query:
+                rows = db.execute("""SELECT e.run_id, e.conversation_id,
+                        snippet(episode_index,0,'','',' … ',48) AS question,
+                        snippet(episode_index,1,'','',' … ',48) AS answer
+                        FROM episode_index e WHERE episode_index MATCH ? AND e.conversation_id=?
+                        AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.run_id=e.run_id AND m.id>=?)
+                        ORDER BY bm25(episode_index,1.6,1), e.rowid DESC LIMIT 4""",
+                                  (query, conversation_id, first_id))
+                for r in rows:
+                    for role, content in (("user",r["question"]), ("assistant",r["answer"])):
+                        older.append({"role":role, "content":content, "run_id":r["run_id"],
+                                      "conversation_id":r["conversation_id"]})
+            # The beginning is a useful fallback for questions about the original goal.
+            rows = db.execute("SELECT m.role,substr(m.content,1,700) AS content,m.run_id,r.conversation_id "
+                              + join + " AND m.id<? ORDER BY m.id LIMIT 4", (conversation_id,first_id))
+            older.extend(dict(r) for r in rows)
+        return recent, total, older
+
     def finish(self, run_id, status, model, metrics, snapshot, answer):
         with self.connect() as db:
             db.execute("UPDATE runs SET status=?, model=?, metrics=?, snapshot=? WHERE id=?",

@@ -14,6 +14,7 @@ import uuid
 
 from .engine import protected, validate_config
 from .evaluation import Evaluation, check_answer
+from .tool_policy import from_trace
 
 
 def _now():
@@ -30,7 +31,8 @@ def _configuration(raw):
     if not isinstance(raw, dict):
         raise ValueError("Each configuration must be an object.")
     _text(raw.get("model"), "Model", 240, required=True)
-    return validate_config(raw)
+    # Saved comparisons produced before tool policies always ran the model.
+    return validate_config({"tool_mode":"off", **raw})
 
 
 def _stored_snapshot(snapshot):
@@ -98,10 +100,11 @@ def _snapshot(raw):
 class Laboratory:
     """Lab requests have their own snapshots and never update chat configuration."""
 
-    def __init__(self, db_path: Path, run_config, inventory):
+    def __init__(self, db_path: Path, run_config, inventory, *, read_run=None):
         self.db_path = db_path
         self.run_config = run_config
         self.inventory = inventory
+        self.read_run = read_run
         self._session = uuid.uuid4().hex
         self._busy = threading.Lock()
         with self._db() as db:
@@ -152,7 +155,10 @@ class Laboratory:
             review = db.execute("SELECT preference FROM lab_reviews WHERE experiment_id=?", (identifier,)).fetchone()
             judgment = db.execute("SELECT model,run_id,assessment FROM lab_judgments WHERE experiment_id=?",
                                   (identifier,)).fetchone()
-        return {**summary, "snapshot": json.loads(row["snapshot"]), "results": results,
+        snapshot = json.loads(row["snapshot"])
+        for config in snapshot["configs"]:
+            config.setdefault("tool_mode", "off")
+        return {**summary, "snapshot": snapshot, "results": results,
                 "preference": review["preference"] if review else None, "judgment": dict(judgment) if judgment else None}
 
     def _update(self, identifier, status, results):
@@ -160,7 +166,31 @@ class Laboratory:
             db.execute("UPDATE lab_experiments SET status=?, results=?, updated_at=? WHERE id=?",
                            (status, json.dumps(protected(results)), _now(), identifier))
 
-    def _execute(self, identifier, snapshot, results, release=True, frozen=None):
+    def _attach_source_tool(self, snapshot):
+        source = snapshot.get("source_run_id")
+        if not source or "source_tool" in snapshot:
+            return
+        capture = None
+        if self.read_run:
+            try:
+                capture = from_trace(self.read_run(source), snapshot["prompt"])
+            except KeyError:
+                pass
+        if capture is None:
+            # A saved case may outlive the chat that supplied its frozen public result.
+            with self._db() as db:
+                saved = db.execute(
+                    "SELECT snapshot FROM lab_cases WHERE json_extract(snapshot,'$.source_run_id')=? "
+                    "AND json_type(snapshot,'$.source_tool')='object' ORDER BY rowid DESC LIMIT 1", (source,)
+                ).fetchone()
+            if saved:
+                stored = json.loads(saved["snapshot"])
+                if stored["prompt"] == snapshot["prompt"]:
+                    capture = stored["source_tool"]
+        snapshot["source_tool"] = capture
+
+    def _execute(self, identifier, snapshot, results, release=True, frozen=None, original_tools=None):
+        shared = None
         try:
             for index, config in enumerate(snapshot["configs"]):
                 result = results[index]
@@ -170,8 +200,18 @@ class Laboratory:
                     context = None if snapshot.get("live_retrieval") else snapshot["context"]
                     if frozen is not None:
                         context = frozen[index]
-                    run = self.run_config(snapshot["prompt"], deepcopy(config),
-                                          context=deepcopy(context), history=deepcopy(snapshot["history"]))
+                    options = {"context":deepcopy(context), "history":deepcopy(snapshot["history"])}
+                    if config.get("tool_mode", "off") != "off":
+                        if original_tools is not None:
+                            options["tool_fixture"] = {"policy":"exact", "capture":original_tools[index]}
+                        elif snapshot.get("source_run_id"):
+                            options["tool_fixture"] = {"policy":"source", "capture":snapshot.get("source_tool")}
+                        elif shared:
+                            options["tool_fixture"] = {"policy":"shared", "capture":shared}
+                    run = self.run_config(snapshot["prompt"], deepcopy(config), **options)
+                    capture = run.get("tool_execution")
+                    if capture and capture.get("permission") == "public read" and capture.get("output"):
+                        shared = capture
                     result["run"] = run
                     result["status"] = "completed" if run["status"] == "completed" else "failed"
                     result["error"] = run.get("error") or None
@@ -199,6 +239,11 @@ class Laboratory:
             return 409, {"error": "A comparison is already running. Open History to follow its progress."}
         started = False
         try:
+            if previous and "source_tool" in previous["snapshot"]:
+                snapshot["source_tool"] = deepcopy(previous["snapshot"]["source_tool"])
+            self._attach_source_tool(snapshot)
+            original_tools = ([from_trace(arm.get("run") or {}, snapshot["prompt"]) for arm in previous["results"]]
+                              if previous else None)
             try:
                 installed = {model["name"]: model for model in self.inventory()}
             except (RuntimeError, OSError):
@@ -227,7 +272,7 @@ class Laboratory:
             if in_suite:
                 self._execute(identifier, snapshot, results, release=False)
             else:
-                threading.Thread(target=self._execute, args=(identifier, snapshot, results, True, frozen),
+                threading.Thread(target=self._execute, args=(identifier, snapshot, results, True, frozen, original_tools),
                                  name="lab-comparison", daemon=True).start()
             started = True
         finally:
@@ -261,6 +306,7 @@ class Laboratory:
         if path == "/api/lab/cases":
             if method == "POST":
                 snapshot = _snapshot(body)
+                self._attach_source_tool(snapshot)
                 name = _text(body.get("name"), "Case name", 100, True).strip()
                 identifier = uuid.uuid4().hex
                 with self._db() as db:
@@ -281,6 +327,8 @@ class Laboratory:
                     db.execute("DELETE FROM lab_cases WHERE id=?", (match[1],))
                     return 200, {"id": match[1]}
             snapshot = json.loads(row["snapshot"])
+            for config in snapshot["configs"]:
+                config.setdefault("tool_mode", "off")
             if "redacted" not in snapshot:
                 # Cases saved by the first release contain masked values without a provenance flag.
                 snapshot["redacted"] = "[redacted]" in row["snapshot"]
