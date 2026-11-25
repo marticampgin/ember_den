@@ -215,7 +215,7 @@ export class VoiceControls {
         if (serial === this.serial) this.stop('The microphone processor stopped. Start dictation again.');
       };
       this.parts = [];
-      this.count = this.voiced = this.lastVoice = 0;
+      this.count = this.voiced = this.lastVoice = this.lastSpeechAt = 0;
       this.setMode('recording', this.handsFree ? 'Listening. Pause to send automatically.' : 'Listening… pause or select the microphone to finish.');
       processor.port.onmessage = ({data}) => {
         if (serial !== this.serial || this.mode !== 'recording') return;
@@ -227,6 +227,7 @@ export class VoiceControls {
         if (energy / samples.length > 0.00012) {
           this.voiced += samples.length;
           this.lastVoice = this.count;
+          this.lastSpeechAt = performance.now();
         }
         const paused = this.voiced > .16 * rate && this.count - this.lastVoice > 1.15 * rate;
         if (this.handsFree && this.count >= maxSamples && !paused) {
@@ -253,7 +254,7 @@ export class VoiceControls {
     this.releaseMic();
     if (this.count < rate / 5) { this.stop('The recording was too short. Try again.'); return; }
     const serial = this.serial;
-    const endedAt = performance.now();
+    const endedAt = this.lastSpeechAt || performance.now();
     try {
       this.setMode('transcribing', 'Transcribing on this device…');
       const audio = wavBase64(this.parts, this.count);
@@ -287,7 +288,7 @@ export class VoiceControls {
     this.reset();
     if (this.handsFree) this.setMode('waiting', 'Waiting for Ember. Microphone off.');
     if (!spoken || (!this.handsFree && getPref('autoplay') === 'off')) return null;
-    return {...spoken, sentAt: performance.now(), serial:this.serial};
+    return {...spoken, sentAt: performance.now(), serial:this.serial, handsFree:this.handsFree};
   }
 
   async speak(text, turn) {
@@ -321,7 +322,15 @@ export class VoiceControls {
         const finished = new Promise(resolve => { source.onended = resolve; });
         source.start();
         if (first) {
-          metric = turn ? 'Recognition ' + seconds(turn.recognition) + ' · Send to first audio ' + seconds(performance.now() - turn.sentAt) + ' · Speech end to first audio (including review) ' + seconds(performance.now() - turn.endedAt) + ' · Synthesis ' + seconds(result.elapsed_ms) : 'Synthesis ' + seconds(result.elapsed_ms);
+          const timings = [];
+          if (turn) {
+            const now = performance.now();
+            const interval = turn.handsFree ? 'Speech end to first audio' : 'Speech end to first audio (including review)';
+            timings.push('Recognition ' + seconds(turn.recognition), 'Send to first audio ' + seconds(now - turn.sentAt),
+              interval + ' ' + seconds(now - turn.endedAt));
+          }
+          timings.push('Synthesis ' + seconds(result.elapsed_ms));
+          metric = timings.join(' · ');
           first = false;
         }
         this.setMode('speaking', 'Speaking. ' + metric);

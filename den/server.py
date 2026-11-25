@@ -25,6 +25,7 @@ from .local_api import make_provider
 from .store import ConflictError, Store
 from .tools import Tools
 from .voice import Voice
+from .speech_models import SpeechModels
 from .strategy import Strategy
 
 
@@ -38,10 +39,11 @@ class Application:
         self.store.recover()
         self.documents = Documents(self.store.path)
         self.tools = Tools(data_dir)
-        self.voice = Voice()
+        self.voice = Voice(SpeechModels(default_data_dir()))
         self.engine = Engine(self.store, provider or make_provider(), self.documents, tools=self.tools)
         self.strategy = Strategy(self.store,self.engine)
-        self.lab = Laboratory(self.store.path, self.engine.run_config, self.engine.provider.inventory)
+        self.lab = Laboratory(self.store.path, self.engine.run_config, self.engine.provider.inventory,
+                              read_run=self.store.run)
 
     def route(self, method, path, body):
         if path.startswith("/api/strategy/"):
