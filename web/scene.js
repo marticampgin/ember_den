@@ -100,6 +100,9 @@ class EmberScene extends HTMLElement {
   async setPose() {
     const state = this.getAttribute('state');
     const pose = state === 'error' ? 'listening' : (Object.hasOwn(poses, state) ? state : 'idle');
+    const previous = this.pose;
+    clearInterval(this.timer);
+    this.poseImage = null;
     this.pose = pose;
     this.setAttribute('aria-label', `${poses[pose].description} in a woodland clearing at dusk.`);
     try {
@@ -109,8 +112,19 @@ class EmberScene extends HTMLElement {
       clearInterval(this.timer);
       this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
       this.ctx.drawImage(image, 0, 0);
+      this.dataset.pose = pose;
       this.frame = 0;
       this.poseImage = image;
+      this.transition?.cancel();
+      if (previous && previous !== pose && !this.media.matches && this.visible) {
+        // A brief stretch on waking and a softer settle on other transitions.
+        const from = previous === 'idle' ? [.74, 1.07] : [.94, 1.02];
+        this.transition = this.canvas.animate([
+          {transform: `scale(${from[1]}, ${from[0]})`},
+          {transform: 'scale(.99, 1.02)', offset: .68},
+          {transform: 'scale(1, 1)'},
+        ], {duration: previous === 'idle' ? 270 : 170, easing: 'ease-out'});
+      }
       this.animatePose();
     } catch {
       this.setAttribute('aria-label', 'A woodland clearing at dusk.');
